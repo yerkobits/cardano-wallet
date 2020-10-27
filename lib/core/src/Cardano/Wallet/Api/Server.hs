@@ -1070,10 +1070,14 @@ listWallets ctx mkApiWallet = do
     -- there may be race conditions where the wallet is deleted just before we
     -- try to read it.
     --
-    -- ... or not?
+    -- But.. why do we need to both runHandler and tryAnyDeep?
     maybeGetWallet :: ApiT WalletId -> IO (Maybe (apiWallet, UTCTime))
     maybeGetWallet =
-        fmap (join . eitherToMaybe) . tryAnyDeep . fmap eitherToMaybe . runHandler . getWallet ctx mkApiWallet
+        fmap (join . eitherToMaybe)
+        . tryAnyDeep
+        . fmap eitherToMaybe
+        . runHandler
+        . getWallet ctx mkApiWallet
 
 putWallet
     :: forall ctx s t k apiWallet.
