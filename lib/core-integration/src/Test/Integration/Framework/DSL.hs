@@ -1063,6 +1063,7 @@ fixtureWalletWithMnemonics ctx = snd <$> allocate create (free . fst)
             (Link.getWallet @'Shelley w) Default Empty
         if getFromResponse (#balance . #getApiT . #available) r > Quantity 0
             then return (getFromResponse id r)
+            else threadDelay oneSecond *> checkBalance w
 
 -- | Restore a faucet Random wallet and wait until funds are available.
 fixtureRandomWalletMws
