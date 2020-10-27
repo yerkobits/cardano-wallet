@@ -97,7 +97,7 @@ import System.FilePath
 import System.IO
     ( BufferMode (..), hSetBuffering, stdout )
 import Test.Hspec
-    ( Spec, SpecWith, describe, hspec, parallel )
+    ( Spec, SpecWith, afterAll, describe, hspec, parallel )
 import Test.Hspec.Extra
     ( aroundAll )
 import Test.Integration.Faucet
@@ -106,6 +106,8 @@ import Test.Integration.Framework.Context
     ( Context (..), PoolGarbageCollectionEvent (..) )
 import Test.Integration.Framework.DSL
     ( KnownCommand (..) )
+import Test.Integration.Framework.Profile
+    ( logTestProfile )
 
 import qualified Cardano.Pool.DB as Pool
 import qualified Cardano.Pool.DB.Sqlite as Pool
@@ -141,7 +143,7 @@ instance KnownCommand Shelley where
 main :: forall t n . (t ~ Shelley, n ~ 'Mainnet) => IO ()
 main = withUtf8Encoding $ withTracers $ \tracers -> do
     hSetBuffering stdout LineBuffering
-    hspec $ do
+    hspec $ afterAll (\_ -> logTestProfile) $ do
         describe "No backend required" $ do
             describe "Miscellaneous CLI tests" $ parallel (MiscellaneousCLI.spec @t)
         specWithServer tracers $ do
