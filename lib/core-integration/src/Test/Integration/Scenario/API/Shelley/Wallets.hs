@@ -195,7 +195,7 @@ spec = describe "SHELLEY_WALLETS" $ do
             mnemonics <- liftIO $ genMnemonics M24
             let payload = Json [json| {
                     "name": #{nameIn},
-                    "mnemonic_sentence": #{explicitMnemonics},
+                    "mnemonic_sentence": #{mnemonics},
                     "passphrase": "12345678910"
                     } |]
             r <- postWallet ctx payload
