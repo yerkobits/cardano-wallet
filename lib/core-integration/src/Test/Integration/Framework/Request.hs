@@ -54,6 +54,8 @@ import Network.HTTP.Types.Status
     ( status400, status500 )
 import Test.Integration.Framework.Context
     ( Context )
+import Test.Integration.Framework.Profile
+    ( bracketProfileIO )
 
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString.Lazy.Char8 as BL8
@@ -103,7 +105,7 @@ request
     -> Payload
         -- ^ Request body
     -> m (HTTP.Status, Either RequestException a)
-request ctx (verb, path) reqHeaders body = do
+request ctx (verb, path) reqHeaders body = liftIO $ bracketProfileIO "request" $ do
     let (base, manager) = ctx ^. typed @(Text, Manager)
     req <- parseRequest $ T.unpack $ base <> path
     let io = handleResponse <$> liftIO (httpLbs (prepareReq req) manager)
