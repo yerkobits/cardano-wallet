@@ -98,7 +98,7 @@ import System.FilePath
 import System.IO
     ( BufferMode (..), hSetBuffering, stdout )
 import Test.Hspec
-    ( Spec, SpecWith, describe, hspec, parallel )
+    ( Spec, SpecWith, afterAll, describe, hspec, parallel )
 import Test.Hspec.Extra
     ( aroundAll )
 import Test.Integration.Faucet
@@ -107,6 +107,8 @@ import Test.Integration.Framework.Context
     ( Context (..), PoolGarbageCollectionEvent (..) )
 import Test.Integration.Framework.DSL
     ( KnownCommand (..) )
+import Test.Integration.Framework.Profile
+    ( logTestProfile )
 import Test.Utils.Paths
     ( inNixBuild )
 
@@ -146,7 +148,7 @@ main = withUtf8Encoding $ withTracers $ \tracers -> do
     hSetBuffering stdout LineBuffering
     setDefaultFilePermissions
     nix <- inNixBuild
-    hspec $ do
+    hspec $ afterAll (\_ -> logTestProfile) $ do
         describe "No backend required" $
             parallelIf (not nix) $ describe "Miscellaneous CLI tests" $
                 MiscellaneousCLI.spec @t

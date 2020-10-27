@@ -358,6 +358,8 @@ import Test.Integration.Faucet
     ( nextTxBuilder, nextWallet )
 import Test.Integration.Framework.Context
     ( Context (..), TxDescription (..) )
+import Test.Integration.Framework.Profile
+    ( bracketProfileIO )
 import Test.Integration.Framework.Request
     ( Headers (..)
     , Payload (..)
@@ -805,7 +807,7 @@ eventuallyUsingDelay
     -> String -- ^ Brief description of the IO action
     -> IO a
     -> m a
-eventuallyUsingDelay delay timeout desc io = liftIO $ do
+eventuallyUsingDelay delay timeout desc io = liftIO $ bracketProfileIO desc $ do
     lastErrorRef <- newIORef Nothing
     winner <- race (threadDelay $ timeout * oneSecond) (trial lastErrorRef)
     case winner of
@@ -1111,7 +1113,7 @@ fixtureWalletWithMnemonics
     -> ResourceT m (ApiWallet, [Text])
 fixtureWalletWithMnemonics ctx = snd <$> allocate create (free . fst)
   where
-    create = do
+    create = bracketProfileIO "fixtureWallet" $ do
         mnemonics <- mnemonicToText <$> nextWallet @"shelley" (_faucet ctx)
         let payload = Json [aesonQQ| {
                 "name": "Faucet Wallet",
@@ -1261,7 +1263,7 @@ fixtureLegacyWallet
     -> ResourceT m ApiByronWallet
 fixtureLegacyWallet ctx style mnemonics = snd <$> allocate create free
   where
-    create = do
+    create = bracketProfileIO "fixtureLegacyWallet" $ do
         let payload = Json [aesonQQ| {
                 "name": "Faucet Byron Wallet",
                 "mnemonic_sentence": #{mnemonics},
