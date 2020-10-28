@@ -46,4 +46,6 @@ logTestProfile = do
   where
     f (label, xs) = fixedF 2 (sum xs) <> "s, N=" <> build (length xs)
         <> " - " <> build label
+
+-- f (label, xs) = listF' (fixedF 2) xs <> "s, N=" <> build (length xs)
 --    avg xs = sum xs / fromIntegral (length xs)

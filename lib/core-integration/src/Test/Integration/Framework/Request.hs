@@ -105,12 +105,20 @@ request
     -> Payload
         -- ^ Request body
     -> m (HTTP.Status, Either RequestException a)
-request ctx (verb, path) reqHeaders body = liftIO $ bracketProfileIO "request" $ do
+request ctx (verb, path) reqHeaders body = liftIO $ bracketProfileIO ("request: " <> show verb <> " " <> T.unpack (cleanPath path)) $ do
     let (base, manager) = ctx ^. typed @(Text, Manager)
     req <- parseRequest $ T.unpack $ base <> path
     let io = handleResponse <$> liftIO (httpLbs (prepareReq req) manager)
     catch io handleException
   where
+    -- "/wallets/aac23f0/fee" -> wallets/*/fee
+    cleanPath = T.intercalate "/"
+        . map (\x -> if (isHash x || isPool x) then "*" else x)
+        . T.splitOn "/"
+      where
+        isHash x = T.length x == 40
+        isPool x = "pool1" `T.isPrefixOf` x
+
     prepareReq :: HTTP.Request -> HTTP.Request
     prepareReq req = req
         { method = verb
