@@ -74,9 +74,7 @@ import Test.Integration.Framework.DSL
     , genMnemonics
     , getFromResponse
     , json
-    , listAddresses
     , listFilteredByronWallets
-    , minUTxOValue
     , postByronWallet
     , request
     , rootPrvKeyFromMnemonics
@@ -97,8 +95,6 @@ import Test.Integration.Framework.TestData
     )
 
 import qualified Cardano.Wallet.Api.Link as Link
-import qualified Data.List as L
-import qualified Data.List.NonEmpty as NE
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Network.HTTP.Types.Status as HTTP
