@@ -631,7 +631,7 @@ spec = describe "SHELLEY_TRANSACTIONS" $ do
         let Just sl = absSlotB <$> apiTx ^. #pendingSince
 
         -- The expected expiry slot (adds the hardcoded default ttl)
-        ttl <- getTTLSlots ctx defaultTxTTL
+        ttl <- liftIO $ getTTLSlots ctx defaultTxTTL
         let txExpectedExp = sl + ttl
 
         -- The actual expiry slot
@@ -640,7 +640,7 @@ spec = describe "SHELLEY_TRANSACTIONS" $ do
         -- Expected and actual are fairly close
         slotDiff txExpectedExp txActualExp `shouldSatisfy` (< 50)
 
-    it "TRANS_TTL_02 - Custom transaction expiry" $ \ctx -> do
+    it "TRANS_TTL_02 - Custom transaction expiry" $ \ctx -> runResourceT $ do
         (wa, wb) <- (,) <$> fixtureWallet ctx <*> emptyWallet ctx
         let amt = minUTxOValue :: Natural
         let testTTL = 42 :: NominalDiffTime
@@ -662,7 +662,7 @@ spec = describe "SHELLEY_TRANSACTIONS" $ do
         let Just sl = absSlotB <$> apiTx ^. #pendingSince
 
         -- The expected expiry slot (adds the hardcoded default ttl)
-        ttl <- getTTLSlots ctx testTTL
+        ttl <- liftIO $ getTTLSlots ctx testTTL
         let txExpectedExp = sl + ttl
 
         -- The actual expiry slot
@@ -672,8 +672,8 @@ spec = describe "SHELLEY_TRANSACTIONS" $ do
         -- due to slot rounding.
         slotDiff txExpectedExp txActualExp `shouldSatisfy` (< 50)
 
-    it "TRANS_TTL_03 - Expired transactions" $ \ctx -> do
-        pendingWith "#1840 this is flaky -- need a better approach"
+    it "TRANS_TTL_03 - Expired transactions" $ \ctx -> runResourceT $ do
+        liftIO $ pendingWith "#1840 this is flaky -- need a better approach"
 
         (wa, wb) <- (,) <$> fixtureWallet ctx <*> emptyWallet ctx
         let amt = minUTxOValue :: Natural
@@ -716,7 +716,7 @@ spec = describe "SHELLEY_TRANSACTIONS" $ do
             , expectField #expiresAt (`shouldSatisfy` isJust)
             ]
 
-    it "TRANS_TTL_04 - Large TTL" $ \ctx -> do
+    it "TRANS_TTL_04 - Large TTL" $ \ctx -> runResourceT $ do
         (wa, wb) <- (,) <$> fixtureWallet ctx <*> emptyWallet ctx
         let amt = minUTxOValue :: Natural
         let hugeTTL = 1e9 :: NominalDiffTime

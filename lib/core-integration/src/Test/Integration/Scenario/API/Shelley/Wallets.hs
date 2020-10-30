@@ -61,7 +61,7 @@ import Control.Monad.Trans.Resource
 import Data.Aeson
     ( ToJSON (..) )
 import Data.Generics.Internal.VL.Lens
-    ( (^.) )
+    ( view, (^.) )
 import Data.Proxy
     ( Proxy (..) )
 import Data.Quantity
