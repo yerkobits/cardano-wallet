@@ -39,7 +39,7 @@ import Control.Monad.IO.Class
 import Control.Monad.Trans.Resource
     ( runResourceT )
 import Data.Generics.Internal.VL.Lens
-    ( (^.) )
+    ( view, (^.) )
 import Data.Maybe
     ( isJust, isNothing )
 import Data.Proxy
