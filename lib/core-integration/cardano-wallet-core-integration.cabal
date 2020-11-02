@@ -74,9 +74,11 @@ library
     , stm
     , template-haskell
     , temporary
+    , transformers
     , text
     , text-class
     , time
+    , unliftio
   hs-source-dirs:
       src
   exposed-modules:

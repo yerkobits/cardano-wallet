@@ -48,8 +48,6 @@ import Control.Monad
     ( forM_ )
 import Control.Monad.IO.Class
     ( liftIO )
-import Control.Monad.Trans.Resource
-    ( runResourceT )
 import Data.Function
     ( (&) )
 import Data.Generics.Internal.VL.Lens
@@ -108,6 +106,7 @@ import Test.Integration.Framework.DSL
     , quitStakePool
     , quitStakePoolUnsigned
     , request
+    , runTest
     , unsafeRequest
     , unsafeResponse
     , verify
@@ -140,7 +139,7 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
     let listPools ctx stake = request @[ApiStakePool] ctx
             (Link.listStakePools stake) Default Empty
 
-    it "STAKE_POOLS_JOIN_01 - Cannot join non-existent wallet" $ \ctx -> runResourceT $ do
+    it "STAKE_POOLS_JOIN_01 - Cannot join non-existent wallet" $ \ctx -> runTest $ do
         w <- emptyWallet ctx
         let wid = w ^. walletId
         _ <- request @ApiWallet ctx
@@ -150,7 +149,7 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
         expectResponseCode HTTP.status404 r
         expectErrorMessage (errMsg404NoWallet wid) r
 
-    it "STAKE_POOLS_JOIN_01 - Cannot join non-existent stakepool" $ \ctx -> runResourceT $ do
+    it "STAKE_POOLS_JOIN_01 - Cannot join non-existent stakepool" $ \ctx -> runTest $ do
         w <- fixtureWallet ctx
         let poolIdAbsent = PoolId $ BS.pack $ replicate 32 1
         r <- joinStakePool @n ctx (ApiT poolIdAbsent) (w, fixturePassphrase)
@@ -158,7 +157,7 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
         expectErrorMessage (errMsg404NoSuchPool (toText poolIdAbsent)) r
 
     it "STAKE_POOLS_JOIN_01 - \
-        \Cannot join existent stakepool with wrong password" $ \ctx -> runResourceT $ do
+        \Cannot join existent stakepool with wrong password" $ \ctx -> runTest $ do
         w <- fixtureWallet ctx
         pool:_ <- map (view #id) . snd <$> unsafeRequest
             @[ApiStakePool] ctx (Link.listStakePools arbitraryStake) Empty
@@ -168,7 +167,7 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
             ]
 
     it "STAKE_POOLS_JOIN_01rewards - \
-        \Can join a pool, earn rewards and collect them" $ \ctx -> runResourceT $ do
+        \Can join a pool, earn rewards and collect them" $ \ctx -> runTest $ do
         -- Setup
         src <- fixtureWallet ctx
         dest <- emptyWallet ctx
@@ -349,7 +348,7 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
                 ]
 
     it "STAKE_POOLS_JOIN_02 - \
-        \Cannot join already joined stake pool" $ \ctx -> runResourceT $ do
+        \Cannot join already joined stake pool" $ \ctx -> runTest $ do
         w <- fixtureWallet ctx
         pool:_ <- map (view #id) . snd <$> unsafeRequest @[ApiStakePool]
             ctx (Link.listStakePools arbitraryStake) Empty
@@ -374,7 +373,7 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
                 (errMsg403PoolAlreadyJoined $ toText $ getApiT pool)
             ]
 
-    it "STAKE_POOLS_JOIN_03 - Cannot join a pool that has retired" $ \ctx -> runResourceT $ do
+    it "STAKE_POOLS_JOIN_03 - Cannot join a pool that has retired" $ \ctx -> runTest $ do
         nonRetiredPoolIds <- eventually "One of the pools should retire." $ do
             response <- listPools ctx arbitraryStake
             verify response [ expectListSize 3 ]
@@ -398,7 +397,7 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
         expectResponseCode HTTP.status404 r
         expectErrorMessage (errMsg404NoSuchPool (toText retiredPoolId)) r
 
-    it "STAKE_POOLS_QUIT_02 - Passphrase must be correct to quit" $ \ctx -> runResourceT $ do
+    it "STAKE_POOLS_QUIT_02 - Passphrase must be correct to quit" $ \ctx -> runTest $ do
         w <- fixtureWallet ctx
         pool:_ <- map (view #id) . snd <$> unsafeRequest @[ApiStakePool]
             ctx (Link.listStakePools arbitraryStake) Empty
@@ -425,14 +424,14 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
 
     it "STAKE_POOL_NEXT_02/STAKE_POOLS_QUIT_01 - \
         \Cannot quit when active: not_delegating"
-        $ \ctx -> runResourceT $ do
+        $ \ctx -> runTest $ do
         w <- fixtureWallet ctx
         quitStakePool @n ctx (w, fixturePassphrase) >>= flip verify
             [ expectResponseCode HTTP.status403
             , expectErrorMessage errMsg403NotDelegating
             ]
 
-    it "STAKE_POOLS_JOIN_01 - Can rejoin another stakepool" $ \ctx -> runResourceT $ do
+    it "STAKE_POOLS_JOIN_01 - Can rejoin another stakepool" $ \ctx -> runTest $ do
         w <- fixtureWallet ctx
 
         -- make sure we are at the beginning of new epoch
@@ -503,7 +502,7 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
                     [ expectField #delegation (`shouldBe` delegating pool2 [])
                     ]
 
-    it "STAKE_POOLS_JOIN_04 - Rewards accumulate" $ \ctx -> runResourceT $ do
+    it "STAKE_POOLS_JOIN_04 - Rewards accumulate" $ \ctx -> runTest $ do
         w <- fixtureWallet ctx
         pool:_ <- map (view #id) . snd <$> unsafeRequest @[ApiStakePool]
             ctx (Link.listStakePools arbitraryStake) Empty
@@ -540,7 +539,7 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
             ]
 
     it "STAKE_POOLS_JOIN_05 - \
-        \Can join when stake key already exists" $ \ctx -> runResourceT $ do
+        \Can join when stake key already exists" $ \ctx -> runTest $ do
         let walletWithPreRegKey =
                 [ "over", "decorate", "flock", "badge", "beauty"
                 , "stamp" , "chest", "owner", "excess", "omit"
@@ -564,7 +563,7 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
                 ]
 
     describe "STAKE_POOLS_JOIN_UNSIGNED_01" $ do
-        it "Can join a pool that's not retiring" $ \ctx -> runResourceT $ do
+        it "Can join a pool that's not retiring" $ \ctx -> runTest $ do
             nonRetiredPools <- eventually "One of the pools should retire." $ do
                 response <- listPools ctx arbitraryStake
 
@@ -606,7 +605,7 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
                     ]
 
     describe "STAKE_POOLS_JOIN_UNSIGNED_02"
-        $ it "Can join a pool that's retiring" $ \ctx -> runResourceT $ do
+        $ it "Can join a pool that's retiring" $ \ctx -> runTest $ do
             nonRetiredPools <- eventually "One of the pools should retire." $ do
                 response <- listPools ctx arbitraryStake
 
@@ -640,7 +639,7 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
                     ]
 
     describe "STAKE_POOLS_JOIN_UNSIGNED_03"
-        $ it "Cannot join a pool that's retired" $ \ctx -> runResourceT $ do
+        $ it "Cannot join a pool that's retired" $ \ctx -> runTest $ do
             nonRetiredPoolIds <-
                 eventually "One of the pools should retire." $ do
                     response <- listPools ctx arbitraryStake
@@ -667,7 +666,7 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
             expectErrorMessage (errMsg404NoSuchPool (toText retiredPoolId)) r
 
     describe "STAKE_POOLS_JOIN_UNSIGNED_04"
-        $ it "Cannot join a pool that's never existed" $ \ctx -> runResourceT $ do
+        $ it "Cannot join a pool that's never existed" $ \ctx -> runTest $ do
             (Right non_existing_pool_id) <- pure $ decodePoolIdBech32
                 "pool1y25deq9kldy9y9gfvrpw8zt05zsrfx84zjhugaxrx9ftvwdpua2"
             w <- fixtureWallet ctx
@@ -678,7 +677,7 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
                 (errMsg404NoSuchPool (toText non_existing_pool_id)) r
 
     describe "STAKE_POOLS_QUIT_UNSIGNED_01"
-        $ it "Join/quit when already joined a pool" $ \ctx -> runResourceT $ do
+        $ it "Join/quit when already joined a pool" $ \ctx -> runTest $ do
             w <- fixtureWallet ctx
 
             pool1:pool2:_ <-
@@ -736,7 +735,7 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
                     ]
 
     describe "STAKE_POOLS_QUIT_UNSIGNED_02"
-        $ it "Cannot quit if not delegating" $ \ctx -> runResourceT $ do
+        $ it "Cannot quit if not delegating" $ \ctx -> runTest $ do
             w <- fixtureWallet ctx
 
             quitStakePoolUnsigned @n @'Shelley ctx w >>= \r -> do
@@ -749,7 +748,7 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
 
     describe "STAKE_POOLS_JOIN_01x - Fee boundary values" $ do
         it "STAKE_POOLS_JOIN_01x - \
-            \I can join if I have just the right amount" $ \ctx -> runResourceT $ do
+            \I can join if I have just the right amount" $ \ctx -> runTest $ do
             w <- fixtureWalletWith @n ctx [costOfJoining ctx + depositAmt ctx]
             pool:_ <- map (view #id) . snd <$> unsafeRequest @[ApiStakePool]
                 ctx (Link.listStakePools arbitraryStake) Empty
@@ -760,7 +759,7 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
                 ]
 
         it "STAKE_POOLS_JOIN_01x - \
-           \I cannot join if I have not enough fee to cover" $ \ctx -> runResourceT $ do
+           \I cannot join if I have not enough fee to cover" $ \ctx -> runTest $ do
             w <- fixtureWalletWith @n ctx [costOfJoining ctx + depositAmt ctx - 1]
             pool:_ <- map (view #id) . snd <$> unsafeRequest @[ApiStakePool]
                 ctx (Link.listStakePools arbitraryStake) Empty
@@ -772,7 +771,7 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
     describe "STAKE_POOLS_QUIT_01x - Fee boundary values" $ do
 
         it "STAKE_POOLS_QUIT_01xx - \
-            \I can quit if I have enough to cover fee" $ \ctx -> runResourceT $ do
+            \I can quit if I have enough to cover fee" $ \ctx -> runTest $ do
             -- change needed to satisfy minUTxOValue
             let change = minUTxOValue - costOfQuitting ctx
             let initBalance =
@@ -816,7 +815,7 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
                     ]
 
         it "STAKE_POOLS_QUIT_01x - \
-            \I cannot quit if I have not enough to cover fees" $ \ctx -> runResourceT $ do
+            \I cannot quit if I have not enough to cover fees" $ \ctx -> runTest $ do
             let initBalance = [ costOfJoining ctx + depositAmt ctx ]
             w <- fixtureWalletWith @n ctx initBalance
 
@@ -841,7 +840,7 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
                 ]
 
     it "STAKE_POOLS_ESTIMATE_FEE_02 - \
-        \empty wallet cannot estimate fee" $ \ctx -> runResourceT $ do
+        \empty wallet cannot estimate fee" $ \ctx -> runTest $ do
         w <- emptyWallet ctx
         delegationFee ctx w >>= flip verify
             [ expectResponseCode HTTP.status403
@@ -851,7 +850,7 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
 
     describe "STAKE_POOLS_LIST_01 - List stake pools" $ do
 
-        it "has non-zero saturation & stake" $ \ctx -> runResourceT $ do
+        it "has non-zero saturation & stake" $ \ctx -> runTest $ do
             eventually "list pools returns non-empty list" $ do
                 r <- listPools ctx arbitraryStake
                 expectResponseCode HTTP.status200 r
@@ -871,7 +870,7 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
                             (.> Quantity (unsafeMkPercentage 0))
                     ]
 
-        it "pools have the correct retirement information" $ \ctx -> runResourceT $ do
+        it "pools have the correct retirement information" $ \ctx -> runTest $ do
 
             let expectedRetirementEpochs = Set.fromList
                     [ Nothing
@@ -889,7 +888,7 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
                         & Set.fromList
                 actualRetirementEpochs `shouldBe` expectedRetirementEpochs
 
-        it "eventually has correct margin, cost and pledge" $ \ctx -> runResourceT $ do
+        it "eventually has correct margin, cost and pledge" $ \ctx -> runTest $ do
             eventually "pool worker finds the certificate" $ do
                 r <- listPools ctx arbitraryStake
                 expectResponseCode HTTP.status200 r
@@ -912,7 +911,7 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
                         , Quantity $ 2 * oneMillionAda
                         ]
 
-        it "at least one pool eventually produces block" $ \ctx -> runResourceT $ do
+        it "at least one pool eventually produces block" $ \ctx -> runTest $ do
             eventually "eventually produces block" $ do
                 (_, Right r) <- listPools ctx arbitraryStake
                 let production = sum $
@@ -923,7 +922,7 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
                 production `shouldSatisfy` (> 0)
                 saturation `shouldSatisfy` (any (> 0))
 
-        it "contains pool metadata" $ \ctx -> runResourceT $ do
+        it "contains pool metadata" $ \ctx -> runTest $ do
             eventually "metadata is fetched" $ do
                 r <- listPools ctx arbitraryStake
                 let metadataPossible = Set.fromList
@@ -962,7 +961,7 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
                             `shouldSatisfy` (`Set.isSubsetOf` metadataPossible)
                     ]
 
-        it "contains and is sorted by non-myopic-rewards" $ \ctx -> runResourceT $ do
+        it "contains and is sorted by non-myopic-rewards" $ \ctx -> runTest $ do
             eventually "eventually shows non-zero rewards" $ do
                 Right pools@[pool1,_pool2,pool3] <-
                     snd <$> listPools ctx arbitraryStake
@@ -973,7 +972,7 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
                 -- Make sure the rewards are not all equal:
                 rewards pool1 .> rewards pool3
 
-        it "non-myopic-rewards are based on stake" $ \ctx -> runResourceT $ do
+        it "non-myopic-rewards are based on stake" $ \ctx -> runTest $ do
             eventually "rewards are smaller for smaller stakes" $ do
                 let stakeSmall = Just (Coin 1_000)
                 let stakeBig = Just (Coin 10_000_000_000_000_000)
@@ -986,13 +985,13 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
 
                 rewardsStakeBig .> rewardsStakeSmall
 
-    it "STAKE_POOLS_LIST_05 - Fails without query parameter" $ \ctx -> runResourceT $ do
+    it "STAKE_POOLS_LIST_05 - Fails without query parameter" $ \ctx -> runTest $ do
         r <- request @[ApiStakePool] ctx
             (Link.listStakePools Nothing) Default Empty
         expectResponseCode HTTP.status400 r
 
     it "STAKE_POOLS_LIST_06 - \
-        \NonMyopicMemberRewards are 0 when stake is 0" $ \ctx -> runResourceT $ do
+        \NonMyopicMemberRewards are 0 when stake is 0" $ \ctx -> runTest $ do
         liftIO $ pendingWith "This assumption seems false, for some reasons..."
         let stake = Just $ Coin 0
         r <- request @[ApiStakePool] ctx (Link.listStakePools stake)
@@ -1010,7 +1009,7 @@ spec = describe "SHELLEY_STAKE_POOLS" $ do
 
     it "STAKE_POOLS_GARBAGE_COLLECTION_01 - \
         \retired pools are garbage collected on schedule and not before" $
-        \ctx -> runResourceT $ do
+        \ctx -> runTest $ do
 
             -- The retirement epoch of the only test pool that is configured
             -- to retire within the lifetime of an integration test run.

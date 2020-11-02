@@ -162,6 +162,10 @@ module Test.Integration.Framework.DSL
 
     -- utilites
     , getRetirementEpoch
+
+
+    , runTest
+
      -- * Re-exports
     , runResourceT
     , ResourceT
@@ -256,18 +260,18 @@ import Control.Arrow
     ( second )
 import Control.Concurrent
     ( threadDelay )
-import Control.Concurrent.Async
-    ( async, race, wait )
 import Control.Exception
     ( Exception (..), SomeException (..), throwIO )
 import Control.Monad
     ( forM_, join, unless, void )
 import Control.Monad.Catch
-    ( MonadCatch, catch, throwM )
+    ( MonadCatch, MonadMask, catch, throwM )
 import Control.Monad.IO.Class
     ( MonadIO, liftIO )
+import Control.Monad.Trans.Reader
+    ( ReaderT, runReaderT )
 import Control.Monad.Trans.Resource
-    ( ResourceT, allocate, runResourceT )
+    ( MonadUnliftIO, ResourceT, allocate, runResourceT )
 import Control.Retry
     ( capDelay, constantDelay, retrying )
 import Crypto.Hash
@@ -356,6 +360,8 @@ import Test.Integration.Framework.Request
     , request
     , unsafeRequest
     )
+import UnliftIO.Async
+    ( async, race, wait )
 import Web.HttpApiData
     ( ToHttpApiData (..) )
 
@@ -378,6 +384,13 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import qualified Data.Text.IO as TIO
 import qualified Network.HTTP.Types.Status as HTTP
+
+
+runTest
+    :: ResourceT (ReaderT (Context t) IO) ()
+    -> Context t
+    -> IO ()
+runTest act = runReaderT (runResourceT act)
 
 --
 -- API response expectations
@@ -619,6 +632,8 @@ waitAllTxsInLedger
         , DecodeStakeAddress n
         , MonadIO m
         , MonadCatch m
+        , MonadUnliftIO m
+        , MonadMask m
         )
     => Context t
     -> ApiWallet
@@ -629,7 +644,7 @@ waitAllTxsInLedger ctx w = eventually "waitAllTxsInLedger: all txs in ledger" $ 
     view (#status . #getApiT) <$> txs `shouldSatisfy` all (== InLedger)
 
 waitForNextEpoch
-    :: (MonadIO m, MonadCatch m)
+    :: (MonadIO m, MonadCatch m, MonadUnliftIO m, MonadMask m)
     => Context t
     -> m ()
 waitForNextEpoch ctx = do
@@ -638,7 +653,7 @@ waitForNextEpoch ctx = do
     eventually "waitForNextEpoch: goes to next epoch" $ do
         epoch' <- getFromResponse (#nodeTip . #slotId . #epochNumber) <$>
             request @ApiNetworkInformation ctx Link.getNetworkInfo Default Empty
-        unless (getApiT epoch' > getApiT epoch) $ expectationFailure "not yet"
+        unless (getApiT epoch' > getApiT epoch) $ liftIO $ expectationFailure "not yet"
 
 between :: (Ord a, Show a) => (a, a) -> a -> Expectation
 between (min', max') x
@@ -714,7 +729,11 @@ expectationFailure' msg = do
 --
 -- It is like 'eventuallyUsingDelay', but with the default delay of 500 ms
 -- between retries.
-eventually :: MonadIO m => String -> IO a -> m a
+eventually
+    :: (MonadIO m, MonadUnliftIO m, MonadCatch m, MonadMask m)
+    => String
+    -> m a
+    -> m a
 eventually = eventuallyUsingDelay (500 * ms)
   where
     ms = 1000
@@ -724,13 +743,13 @@ eventually = eventuallyUsingDelay (500 * ms)
 --
 -- It sleeps for a specified delay between retries.
 eventuallyUsingDelay
-    :: MonadIO m
+    :: (MonadIO m, MonadUnliftIO m, MonadCatch m, MonadMask m)
     => Int -- ^ Delay in microseconds
     -> String -- ^ Brief description of the IO action
-    -> IO a
     -> m a
-eventuallyUsingDelay delay desc io = liftIO $ bracketProfileIO desc $ do
-    lastErrorRef <- newIORef Nothing
+    -> m a
+eventuallyUsingDelay delay desc io = bracketProfileIO desc $ do
+    lastErrorRef <- liftIO $ newIORef Nothing
     -- NOTE
     -- This __90s__ is mostly justified by the parameters in the shelley
     -- genesis. The longest action we have two wait for are about 2 epochs,
@@ -738,9 +757,9 @@ eventuallyUsingDelay delay desc io = liftIO $ bracketProfileIO desc $ do
     -- much longer than that isn't really useful (in particular, this doesn't
     -- depend on the host machine running the test, because the protocol moves
     -- forward at the same speed regardless...)
-    winner <- race (threadDelay $ 90 * oneSecond) (trial lastErrorRef)
+    winner <- race (liftIO $ threadDelay $ 90 * oneSecond) (trial lastErrorRef)
     case winner of
-        Left () -> do
+        Left () -> liftIO $ do
             lastError <- readIORef lastErrorRef
             let msg = "Waited longer than 90s (more than 2 epochs) to resolve action: " ++ show desc ++ "."
             case fromException @HUnitFailure =<< lastError of
@@ -757,8 +776,8 @@ eventuallyUsingDelay delay desc io = liftIO $ bracketProfileIO desc $ do
     trial lastErrorRef = loop
       where
         loop = io `catch` \(e :: SomeException) -> do
-            writeIORef lastErrorRef (Just e)
-            threadDelay delay
+            liftIO $ writeIORef lastErrorRef (Just e)
+            liftIO $ threadDelay delay
             loop
 
 utcIso8601ToText :: UTCTime -> Text
@@ -808,7 +827,7 @@ restoreWalletFromPubKey ctx pubKey name = snd <$> allocate create destroy
 
 -- | Create an empty wallet
 emptyRandomWallet
-    :: (MonadIO m, MonadCatch m)
+    :: (MonadIO m, MonadCatch m, MonadUnliftIO m)
     => Context t
     -> ResourceT m ApiByronWallet
 emptyRandomWallet ctx = do
@@ -817,7 +836,7 @@ emptyRandomWallet ctx = do
         ("Random Wallet", mnemonic, fixturePassphrase)
 
 emptyRandomWalletMws
-    :: (MonadIO m, MonadCatch m)
+    :: (MonadIO m, MonadCatch m, MonadUnliftIO m)
     => Context t
     -> ResourceT m (ApiByronWallet, Mnemonic 12)
 emptyRandomWalletMws ctx = do
@@ -826,7 +845,7 @@ emptyRandomWalletMws ctx = do
         ("Random Wallet", mnemonicToText @12 mnemonic, fixturePassphrase)
 
 emptyIcarusWallet
-    :: (MonadIO m, MonadCatch m)
+    :: (MonadIO m, MonadCatch m, MonadUnliftIO m)
     => Context t
     -> ResourceT m ApiByronWallet
 emptyIcarusWallet ctx = do
@@ -835,7 +854,7 @@ emptyIcarusWallet ctx = do
         ("Icarus Wallet", mnemonic, fixturePassphrase)
 
 emptyIcarusWalletMws
-    :: (MonadIO m, MonadCatch m)
+    :: (MonadIO m, MonadCatch m, MonadUnliftIO m)
     => Context t
     -> ResourceT m (ApiByronWallet, Mnemonic 15)
 emptyIcarusWalletMws ctx = do
@@ -844,7 +863,7 @@ emptyIcarusWalletMws ctx = do
         ("Icarus Wallet",mnemonicToText @15 mnemonic, fixturePassphrase)
 
 emptyRandomWalletWithPasswd
-    :: (MonadIO m, MonadCatch m)
+    :: (MonadIO m, MonadCatch m, MonadUnliftIO m)
     => Context t
     -> Text
     -> ResourceT m ApiByronWallet
@@ -871,7 +890,7 @@ emptyRandomWalletWithPasswd ctx rawPwd = do
 
 
 postWallet'
-    :: (MonadIO m, MonadCatch m)
+    :: (MonadIO m, MonadCatch m, MonadUnliftIO m)
     => Context t
     -> Headers
     -> Payload
@@ -886,7 +905,7 @@ postWallet' ctx headers payload = snd <$> allocate create (free . snd)
     free (Left _) = return ()
 
 postWallet
-    :: (MonadIO m, MonadCatch m)
+    :: (MonadIO m, MonadCatch m, MonadUnliftIO m)
     => Context t
     -> Payload
     -> ResourceT m (HTTP.Status, Either RequestException ApiWallet)
@@ -894,7 +913,7 @@ postWallet ctx = postWallet' ctx Default
 
 
 postByronWallet
-    :: (MonadIO m, MonadCatch m)
+    :: (MonadIO m, MonadCatch m, MonadUnliftIO m)
     => Context t
     -> Payload
     -> ResourceT m (HTTP.Status, Either RequestException ApiByronWallet)
@@ -908,7 +927,7 @@ postByronWallet ctx payload = snd <$> allocate create (free . snd)
     free (Left _) = return ()
 
 emptyByronWalletWith
-    :: forall t m. (MonadIO m, MonadCatch m)
+    :: forall t m. (MonadIO m, MonadCatch m, MonadUnliftIO m)
     => Context t
     -> String
     -> (Text, [Text], Text)
@@ -925,7 +944,7 @@ emptyByronWalletWith ctx style (name, mnemonic, pass) = do
     return (getFromResponse id r)
 
 emptyByronWalletFromXPrvWith
-    :: forall t m. (MonadIO m, MonadCatch m)
+    :: forall t m. (MonadIO m, MonadCatch m, MonadUnliftIO m)
     => Context t
     -> String
     -> (Text, Text, Text)
@@ -943,7 +962,7 @@ emptyByronWalletFromXPrvWith ctx style (name, key, passHash) = do
 
 -- | Create an empty wallet
 emptyWallet
-    :: (MonadIO m, MonadCatch m)
+    :: (MonadIO m, MonadCatch m, MonadUnliftIO m)
     => Context t
     -> ResourceT m ApiWallet
 emptyWallet ctx = do
@@ -959,7 +978,7 @@ emptyWallet ctx = do
 
 -- | Create an empty wallet
 emptyWalletWith
-    :: (MonadIO m, MonadCatch m)
+    :: (MonadIO m, MonadCatch m, MonadUnliftIO m)
     => Context t
     -> (Text, Text, Int)
     -> ResourceT m ApiWallet
@@ -976,7 +995,7 @@ emptyWalletWith ctx (name, passphrase, addrPoolGap) = do
     return (getFromResponse id r)
 
 rewardWallet
-    :: (MonadIO m, MonadCatch m)
+    :: (MonadIO m, MonadCatch m, MonadUnliftIO m, MonadMask m)
     => Context t
     -> ResourceT m (ApiWallet, Mnemonic 24)
 rewardWallet ctx = do
@@ -1028,7 +1047,7 @@ fixturePassphraseEncrypted =
 -- wallets through small blocks of @runResourceT@ (e.g. once per test). It
 -- doesn't return @ReleaseKey@ since manual releasing is not needed.
 fixtureWallet
-    :: MonadIO m
+    :: (MonadIO m, MonadUnliftIO m)
     => Context t
     -> ResourceT m ApiWallet
 fixtureWallet ctx = do
@@ -1036,7 +1055,7 @@ fixtureWallet ctx = do
     return w
 
 fixtureWalletWithMnemonics
-    :: MonadIO m
+    :: (MonadIO m, MonadUnliftIO m)
     => Context t
     -> ResourceT m (ApiWallet, [Text])
 fixtureWalletWithMnemonics ctx = snd <$> allocate create (free . fst)
@@ -1067,7 +1086,7 @@ fixtureWalletWithMnemonics ctx = snd <$> allocate create (free . fst)
 
 -- | Restore a faucet Random wallet and wait until funds are available.
 fixtureRandomWalletMws
-    :: (MonadIO m, MonadCatch m)
+    :: (MonadIO m, MonadCatch m, MonadUnliftIO m)
     => Context t
     -> ResourceT m (ApiByronWallet, Mnemonic 12)
 fixtureRandomWalletMws ctx = do
@@ -1075,7 +1094,7 @@ fixtureRandomWalletMws ctx = do
     (,mnemonics) <$> fixtureLegacyWallet ctx "random" (mnemonicToText mnemonics)
 
 fixtureRandomWallet
-    :: (MonadIO m, MonadCatch m)
+    :: (MonadIO m, MonadCatch m, MonadUnliftIO m)
     => Context t
     -> ResourceT m ApiByronWallet
 fixtureRandomWallet = fmap fst . fixtureRandomWalletMws
@@ -1085,6 +1104,7 @@ fixtureRandomWalletAddrs
         ( PaymentAddress n ByronKey
         , MonadIO m
         , MonadCatch m
+        , MonadUnliftIO m
         )
     => Context t
     -> ResourceT m (ApiByronWallet, [Address])
@@ -1107,6 +1127,7 @@ fixtureRandomWalletWith
         , PaymentAddress n ByronKey
         , MonadIO m
         , MonadCatch m
+        , MonadUnliftIO m
         )
     => Context t
     -> [Natural]
@@ -1125,7 +1146,7 @@ fixtureRandomWalletWith ctx coins0 = do
 
 -- | Restore a faucet Icarus wallet and wait until funds are available.
 fixtureIcarusWalletMws
-    :: (MonadIO m, MonadCatch m)
+    :: (MonadIO m, MonadCatch m, MonadUnliftIO m)
     => Context t
     -> ResourceT m (ApiByronWallet, Mnemonic 15)
 fixtureIcarusWalletMws ctx = do
@@ -1133,7 +1154,7 @@ fixtureIcarusWalletMws ctx = do
     (,mnemonics) <$> fixtureLegacyWallet ctx "icarus" (mnemonicToText mnemonics)
 
 fixtureIcarusWallet
-    :: (MonadIO m, MonadCatch m)
+    :: (MonadIO m, MonadCatch m, MonadUnliftIO m)
     => Context t
     -> ResourceT m ApiByronWallet
 fixtureIcarusWallet = fmap fst . fixtureIcarusWalletMws
@@ -1143,6 +1164,7 @@ fixtureIcarusWalletAddrs
         ( PaymentAddress n IcarusKey
         , MonadIO m
         , MonadCatch m
+        , MonadUnliftIO m
         )
     => Context t
     -> ResourceT m (ApiByronWallet, [Address])
@@ -1165,6 +1187,7 @@ fixtureIcarusWalletWith
         , PaymentAddress n IcarusKey
         , MonadIO m
         , MonadCatch m
+        , MonadUnliftIO m
         )
     => Context t
     -> [Natural]
@@ -1184,7 +1207,7 @@ fixtureIcarusWalletWith ctx coins0 = do
 
 -- | Restore a legacy wallet (Byron or Icarus)
 fixtureLegacyWallet
-    :: forall t m. (MonadIO m, MonadCatch m)
+    :: forall t m. (MonadIO m, MonadCatch m, MonadUnliftIO m)
     => Context t
     -> String
     -> [Text]
@@ -1231,6 +1254,7 @@ fixtureWalletWith
         , DecodeStakeAddress n
         , MonadIO m
         , MonadCatch m
+        , MonadUnliftIO m
         )
     => Context t
     -> [Natural]
@@ -1615,7 +1639,7 @@ deleteAllWallets ctx = do
 -- | Calls 'GET /wallets' and filters the response. This allows tests to be
 -- written for a parallel setting.
 listFilteredWallets
-    :: (MonadIO m, MonadCatch m)
+    :: (MonadIO m, MonadCatch m, MonadUnliftIO m)
     => Set Text -- ^ Set of walletIds to include
     -> Context t
     -> m (HTTP.Status, Either RequestException [ApiWallet])
@@ -1627,7 +1651,7 @@ listFilteredWallets include ctx = do
 -- | Calls 'GET /byron-wallets' and filters the response. This allows tests to
 -- be written for a parallel setting.
 listFilteredByronWallets
-    :: (MonadIO m, MonadCatch m)
+    :: (MonadIO m, MonadCatch m, MonadUnliftIO m)
     => Set Text -- ^ Set of walletIds to include
     -> Context t
     -> m (HTTP.Status, Either RequestException [ApiByronWallet])
