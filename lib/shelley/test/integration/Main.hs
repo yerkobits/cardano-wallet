@@ -55,6 +55,7 @@ import Cardano.Wallet.Shelley.Launch
     ( ClusterLog
     , RunningNode (..)
     , moveInstantaneousRewardsTo
+    , newClusterSetupFaucet
     , nodeMinSeverityFromEnv
     , oneMillionAda
     , poolConfigsFromEnv
@@ -75,6 +76,8 @@ import Control.Concurrent.MVar
     ( newEmptyMVar, putMVar, takeMVar )
 import Control.Exception
     ( throwIO )
+import Control.Monad
+    ( replicateM_ )
 import Control.Monad.IO.Class
     ( liftIO )
 import Control.Tracer
@@ -93,14 +96,18 @@ import Network.HTTP.Client
     , newManager
     , responseTimeoutMicro
     )
+import System.Environment
+    ( lookupEnv )
 import System.FilePath
     ( (</>) )
 import System.IO
     ( BufferMode (..), hSetBuffering, stdout )
 import Test.Hspec
-    ( Spec, SpecWith, describe, hspec, parallel )
+    ( Spec, SpecWith, describe, parallel )
 import Test.Hspec.Extra
     ( aroundAll )
+import Test.Hspec.Runner
+    ( hspec )
 import Test.Integration.Faucet
     ( genRewardAccounts, mirMnemonics, shelleyIntegrationTestFunds )
 import Test.Integration.Framework.Context
@@ -145,7 +152,14 @@ main :: forall t n . (t ~ Shelley, n ~ 'Mainnet) => IO ()
 main = withUtf8Encoding $ withTracers $ \tracers -> do
     hSetBuffering stdout LineBuffering
     nix <- inNixBuild
-    hspec $ do
+
+    -- Repeat to detect flaky tests if on nightly.
+    --
+    -- TODO: Should be nicer to have a `--repeated 3` flag, and have the
+    -- rebuild.hs script set it.
+    repetitions <- maybe 1 (const 10) <$> lookupEnv "NIGHTLY_BUILD"
+
+    hspec $ replicateM_ repetitions $ do
         describe "No backend required" $
             parallelIf (not nix) $ describe "Miscellaneous CLI tests" $
                 MiscellaneousCLI.spec @t
@@ -251,6 +265,7 @@ specWithServer (tr, tracers) = aroundAll withContext
         minSev <- nodeMinSeverityFromEnv
         testPoolConfigs <- poolConfigsFromEnv
         withSystemTempDir tr' "test" $ \dir -> do
+            setupFaucet <- newClusterSetupFaucet tr'
             extraLogDir <- (fmap (,Info)) <$> testLogDirFromEnv
             withCluster
                 tr'
@@ -258,21 +273,22 @@ specWithServer (tr, tracers) = aroundAll withContext
                 testPoolConfigs
                 dir
                 extraLogDir
+                setupFaucet
                 onByron
-                (afterFork dir)
+                (afterFork dir setupFaucet)
                 (onClusterStart action dir dbDecorator)
 
     tr' = contramap MsgCluster tr
     onByron _ = pure ()
-    afterFork dir _ = do
+    afterFork dir setupFaucet _ = do
         traceWith tr MsgSettingUpFaucet
         let encodeAddr = T.unpack . encodeAddress @'Mainnet
         let addresses = map (first encodeAddr) shelleyIntegrationTestFunds
-        sendFaucetFundsTo tr' dir addresses
+        sendFaucetFundsTo tr' dir setupFaucet addresses
 
         let rewards = (,Coin $ fromIntegral oneMillionAda) <$>
                 concatMap genRewardAccounts mirMnemonics
-        moveInstantaneousRewardsTo tr' dir rewards
+        moveInstantaneousRewardsTo tr' dir setupFaucet rewards
 
     onClusterStart
         action dir dbDecorator (RunningNode socketPath block0 (gp, vData)) = do

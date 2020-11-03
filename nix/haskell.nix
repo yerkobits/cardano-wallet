@@ -97,6 +97,8 @@ let
             # Integration tests will place logs here
             export TESTS_LOGDIR=$(mktemp -d)/logs
 
+            export NIGHTLY_BUILD=true
+
             # Causes integration tests to be re-run whenever the git revision
             # changes, even if everything else is identical.
             # Since these tests tend to fail a lot, we don't want
@@ -105,6 +107,7 @@ let
           '' + lib.optionalString stdenv.isDarwin ''
             export TMPDIR=/tmp
           '';
+
 
           integration.postCheck = ''
             # fixme: There needs to be some Haskell.nix changes to
