@@ -154,10 +154,8 @@ main = withUtf8Encoding $ withTracers $ \tracers -> do
     nix <- inNixBuild
 
     -- Repeat to detect flaky tests if on nightly.
-    --
-    -- TODO: Should be nicer to have a `--repeated 3` flag, and have the
-    -- rebuild.hs script set it.
-    repetitions <- maybe 1 (const 10) <$> lookupEnv "NIGHTLY_BUILD"
+    repetitions <- maybe 1 read
+        <$> lookupEnv "CARDANO_WALLET_INTEGRATION_TEST_REPETITIONS"
 
     repeatedHspec repetitions $ do
         describe "No backend required" $
