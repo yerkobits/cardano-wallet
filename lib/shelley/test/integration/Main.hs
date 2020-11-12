@@ -77,7 +77,7 @@ import Control.Concurrent.MVar
 import Control.Exception
     ( throwIO )
 import Control.Monad
-    ( replicateM_ )
+    ( replicateM )
 import Control.Monad.IO.Class
     ( liftIO )
 import Control.Tracer
@@ -97,7 +97,7 @@ import Network.HTTP.Client
     , responseTimeoutMicro
     )
 import System.Environment
-    ( lookupEnv )
+    ( getArgs, lookupEnv, withArgs )
 import System.FilePath
     ( (</>) )
 import System.IO
@@ -107,7 +107,7 @@ import Test.Hspec
 import Test.Hspec.Extra
     ( aroundAll )
 import Test.Hspec.Runner
-    ( hspec )
+    ( defaultConfig, evaluateSummary, readConfig, runSpec )
 import Test.Integration.Faucet
     ( genRewardAccounts, mirMnemonics, shelleyIntegrationTestFunds )
 import Test.Integration.Framework.Context
@@ -159,7 +159,7 @@ main = withUtf8Encoding $ withTracers $ \tracers -> do
     -- rebuild.hs script set it.
     repetitions <- maybe 1 (const 10) <$> lookupEnv "NIGHTLY_BUILD"
 
-    hspec $ replicateM_ repetitions $ do
+    repeatedHspec repetitions $ do
         describe "No backend required" $
             parallelIf (not nix) $ describe "Miscellaneous CLI tests" $
                 MiscellaneousCLI.spec @t
@@ -200,6 +200,14 @@ main = withUtf8Encoding $ withTracers $ \tracers -> do
   where
     parallelIf :: forall a. Bool -> SpecWith a -> SpecWith a
     parallelIf flag = if flag then parallel else id
+
+    -- Runs a @Spec@ in /sequence/ n times, and at the end, concatenates the
+    -- results.
+    repeatedHspec n spec =
+          getArgs
+      >>= readConfig defaultConfig
+      >>= withArgs [] . fmap mconcat . replicateM n . runSpec spec
+      >>= evaluateSummary
 
 specWithServer
     :: (Tracer IO TestsLog, Tracers IO)
