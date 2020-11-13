@@ -34,10 +34,9 @@ steps:
   #      queue: benchmark
   #
   - label: 'Repeated integration'
-    command: "./.buildkite/repeated-integration.sh"
+    command: "nix-build -A checks.cardano-wallet.integration --no-out-link"
     timeout_in_minutes: 360
     env:
-      NIGHTLY_BUILD: "true"
       HOME: "/cache/cardano-wallet.home"
       CARDANO_WALLET_INTEGRATION_TEST_REPETITIONS: 7
     agents:
