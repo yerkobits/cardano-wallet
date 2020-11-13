@@ -104,8 +104,10 @@ let
             echo "Git revision is ${toString gitrev}"
           '' + lib.optionalString stdenv.isDarwin ''
             export TMPDIR=/tmp
-          '';
-
+          '' + (lib.concatMapStrings
+            # pass some environment variables through
+            (env: let val = builtins.getEnv env; in lib.optionalString (val != "") "${env}=${val}\n")
+            ["CARDANO_WALLET_INTEGRATION_TEST_REPETITIONS"]);
 
           integration.postCheck = ''
             # fixme: There needs to be some Haskell.nix changes to

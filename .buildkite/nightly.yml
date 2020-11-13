@@ -39,6 +39,7 @@ steps:
     env:
       NIGHTLY_BUILD: "true"
       HOME: "/cache/cardano-wallet.home"
+      CARDANO_WALLET_INTEGRATION_TEST_REPETITIONS: 3
     agents:
       system: x86_64-linux
 
