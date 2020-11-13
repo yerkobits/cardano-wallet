@@ -106,7 +106,7 @@ let
             export TMPDIR=/tmp
           '' + (lib.concatMapStrings
             # pass some environment variables through
-            (env: let val = builtins.getEnv env; in lib.optionalString (val != "") "${env}=${val}\n")
+            (env: let val = builtins.getEnv env; in lib.optionalString (val != "") "export ${env}=${val}\n")
             ["CARDANO_WALLET_INTEGRATION_TEST_REPETITIONS"]);
 
           integration.postCheck = ''
