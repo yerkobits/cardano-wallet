@@ -163,6 +163,11 @@ let
         # and add shell completions for main executables.
         packages.cardano-wallet.components.exes.cardano-wallet.postInstall = optparseCompletionPostInstall + libSodiumPostInstall;
         packages.cardano-wallet-core.components.tests.unit.postInstall = libSodiumPostInstall;
+        packages.cardano-wallet-core.components.tests.unit.preCheck =
+            lib.concatMapStrings
+            # pass some environment variables through
+            (env: let val = builtins.getEnv env; in lib.optionalString (val != "") "export ${env}=${val}\n")
+            ["HSPEC_OPTIONS"];
         packages.cardano-wallet-cli.components.tests.unit.postInstall = libSodiumPostInstall;
       }
 

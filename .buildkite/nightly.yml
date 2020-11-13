@@ -42,6 +42,15 @@ steps:
     agents:
       system: x86_64-linux
 
+  - label: 'Extensive unit tests'
+    command: "nix-build -A checks.cardano-wallet-core.unit --no-out-link"
+    timeout_in_minutes: 360
+    env:
+      HOME: "/cache/cardano-wallet.home"
+      HSPEC_OPTIONS: "--qc-max-success=10000"
+    agents:
+      system: x86_64-linux
+
       #  - label: 'Latency benchmark'
       #    command: "./.buildkite/bench-latency.sh"
       #    timeout_in_minutes: 120
