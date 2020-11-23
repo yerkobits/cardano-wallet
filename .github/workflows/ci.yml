@@ -1,25 +1,33 @@
-# Every night at 00:00UTC
-# Download the latest master branch build of windows testing bundle
-# and run it.
-# After that passes, hand over to the Buildkite nightly pipeline.
+# On branch push, download the windows testing bundle build and run it.
 
 name: cardano-wallet Windows Tests
 
 on:
-  schedule:
-    - cron: '0 0 * * *'
+  push:
+    branches:
+      - master
+      - bors/staging
+      - bors/trying
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 jobs:
   tests:
     runs-on: windows-2016
     name: Run tests on Windows
+    if: '!github.event.pull_request || (github.event.pull_request.draft == false)'
     steps:
-      - name: Fetch Windows testing bundle
+      - name: 'Wait for Hydra build'
+        uses: rvl/hydra-build-products-action@master
+        id: hydra
+        with:
+          hydra: 'https://hydra.iohk.io'
+          jobs: 'cardano-wallet-tests-win64'
+      - name: 'Fetch Windows testing bundle'
         shell: powershell
         run: |
-          $url = "https://hydra.iohk.io/job/Cardano/cardano-wallet/cardano-wallet-tests-win64/latest/download/1"
           $output = "cardano-wallet-tests-win64.zip"
-          Invoke-WebRequest -Uri $url -OutFile $output
+          Invoke-WebRequest -Uri ${{ steps.hydra.outputs.buildProducts }} -OutFile $output
           Expand-Archive -LiteralPath $output -DestinationPath .
           Get-ChildItem
       - name: 'cardano-wallet-core:unit'
@@ -36,11 +44,13 @@ jobs:
       - name: 'cardano-wallet:integration'
         run: '.\\cardano-wallet-test-integration.exe --color'
         timeout-minutes: 60
+
       - uses: actions/checkout@v2
         with:
           fetch-depth: 0
       - name: "Advance windows-tests-pass and all-tests-pass branches"
+        if: contains(github.ref, 'master')
         shell: bash
-        run: "bash .buildkite/push-branch.sh windows-tests-pass linux-tests-pass all-tests-pass"
+        run: 'bash .buildkite/push-branch.sh windows-tests-pass linux-tests-pass all-tests-pass'
         env:
           ACTIONS_SSH_KEY: "${{ secrets.ACTIONS_SSH_KEY }}"
