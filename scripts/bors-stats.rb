@@ -42,20 +42,18 @@ def fetch_comments
   numberPRsToFetch = 40
   numberCommentsToFetch = 100
   query = <<~END
-    query {
-      repository(name: "cardano-wallet", owner: "input-output-hk") {
-        pullRequests(last: #{numberPRsToFetch}) { edges { node {
-          comments(first: #{numberCommentsToFetch}) { edges { node {
-            bodyText,
-            createdAt,
-            url,
-            author {
-                login
-            }
-          }}}
+    query { repository(name: "cardano-wallet", owner: "input-output-hk") {
+      pullRequests(last: #{numberPRsToFetch}) { edges { node {
+        comments(first: #{numberCommentsToFetch}) { edges { node {
+          bodyText,
+          createdAt,
+          url,
+          author {
+              login
+          }
         }}}
-      }
-    }
+      }}}
+    }}
   END
   response = sendGithubGraphQLQuery(query)
   return response['data']['repository']['pullRequests']['edges']
@@ -79,15 +77,13 @@ end
 # {2083=>[{"number"=>2083, "url"=>"https://github.com/input-output-hk/cardano-wallet/issues/2083", "title"=>"Windows integration" }
 def fetch_gh_ticket_titlemap
   query = <<~END
-    query {
-      repository(name: "cardano-wallet", owner: "input-output-hk") {
-        issues(labels: ["Test failure"], last: 100) { edges { node {
-          number,
-          url,
-          title
-        }}}
-      }
-    }
+    query { repository(name: "cardano-wallet", owner: "input-output-hk") {
+      issues(labels: ["Test failure"], last: 100) { edges { node {
+        number,
+        url,
+        title
+      }}}
+    }}
   END
   res = sendGithubGraphQLQuery(query)['data']['repository']['issues']['edges']
     .map { |x| x['node'] }
