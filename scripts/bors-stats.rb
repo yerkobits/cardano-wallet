@@ -36,18 +36,18 @@ def fetch_comments
   numberCommentsToFetch = 100
   query = <<~END
     query {
-    repository(name: "cardano-wallet", owner: "input-output-hk") {
-      pullRequests(last: #{numberPRsToFetch}) { edges { node {
-        comments(first: #{numberCommentsToFetch}) { edges { node {
-          bodyText,
-          createdAt,
-          url,
-          author {
-              login
-          }
+      repository(name: "cardano-wallet", owner: "input-output-hk") {
+        pullRequests(last: #{numberPRsToFetch}) { edges { node {
+          comments(first: #{numberCommentsToFetch}) { edges { node {
+            bodyText,
+            createdAt,
+            url,
+            author {
+                login
+            }
+          }}}
         }}}
-      }}}
-    }
+      }
     }
   END
   response = sendGithubGraphQLQuery(query)
@@ -61,9 +61,34 @@ def fetch_comments
           end
 end
 
-objs = fetch_comments
-for obj in objs do
-   puts ""
-   puts obj
-   puts ""
+# Fetch github comments with the "Test failure" label, and create a map from
+# issue number to title and url
+#
+# Returns e.g.
+# {2083=>[{"number"=>2083, "url"=>"https://github.com/input-output-hk/cardano-wallet/issues/2083", "title"=>"Windows integration" }
+def fetch_gh_ticket_titlemap
+  query = <<~END
+    query {
+      repository(name: "cardano-wallet", owner: "input-output-hk") {
+        issues(labels: ["Test failure"], last: 100) { edges { node {
+          number,
+          url,
+          title
+        }}}
+      }
+    }
+  END
+  res = sendGithubGraphQLQuery(query)['data']['repository']['issues']['edges']
+    .map { |x| x['node'] }
+    .group_by { |x| x['number']}
+
 end
+
+puts fetch_gh_ticket_titlemap
+
+#objs = fetch_comments
+#for obj in objs do
+#   puts ""
+#   puts obj
+#   puts ""
+#end
