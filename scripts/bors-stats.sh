@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+require 'open-uri'
+require 'JSON'
+
 # Script for analysing recent CI failures.
 
 # TODO: Add option to output raw JSON.
