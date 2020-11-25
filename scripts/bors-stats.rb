@@ -20,19 +20,26 @@ def sendGithubGraphQLQuery(qry)
 end
 
 # A parsed bors comment corresponding to a succeeding or failing build
-BorsComment = Struct.new(:url, :bodyText, :createdAt, :succeeded) do
+BorsComment = Struct.new(:url, :bodyText, :createdAt, :tags, :succeeded) do
   def to_s
     self.pretty
   end
 
   def pretty
+    return self.pretty_time + "\n" + bodyText
+  end
+  def pretty_time
     color = (succeeded ? ANSI.green : ANSI.red)
-    return color + createdAt.strftime("%d %b %H:%M") + ANSI.clear + "\n" + bodyText
+    return color + createdAt.strftime("%d %b %H:%M") + ANSI.clear
+  end
+
+  def pretty_tags
+    ANSI.yellow + tags.join(", ") + ANSI.clear
   end
 end
 
 def fetch_comments
-  numberPRsToFetch = 10
+  numberPRsToFetch = 40
   numberCommentsToFetch = 100
   query = <<~END
     query {
@@ -57,8 +64,12 @@ def fetch_comments
       .map { |x| x['node']}
       .filter { |x| x['author']['login'] == "iohk-bors" }
       .map do |x|
-            BorsComment.new( x['url'] , x['bodyText'], DateTime.parse(x['createdAt']), (x['bodyText'].include? "Build succeeded"))
-          end
+        body = x['bodyText']
+        tags = body.scan(/^#[\d\w]+/).to_a
+        createdAt = DateTime.parse(x['createdAt'])
+        succ = x['bodyText'].include? "Build succeeded"
+        BorsComment.new(x['url'], body, createdAt, tags, succ)
+      end
 end
 
 # Fetch github comments with the "Test failure" label, and create a map from
@@ -81,12 +92,20 @@ def fetch_gh_ticket_titlemap
   res = sendGithubGraphQLQuery(query)['data']['repository']['issues']['edges']
     .map { |x| x['node'] }
     .group_by { |x| x['number']}
+end
+
+def show_bors_failures(comments, titlemap)
+  comments.each do |c|
+    # Only print the full comment if failure or if no tags
+    maybeDetails = (c.succeeded or c.tags.length > 0) ? "" : c.bodyText
+    puts (c.pretty_time + " " + c.pretty_tags + "\n" + maybeDetails)
+  end
 
 end
 
-puts fetch_gh_ticket_titlemap
+#puts fetch_gh_ticket_titlemap
 
-#objs = fetch_comments
+show_bors_failures(fetch_comments, fetch_gh_ticket_titlemap)
 #for obj in objs do
 #   puts ""
 #   puts obj
