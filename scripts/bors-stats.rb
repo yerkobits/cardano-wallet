@@ -5,6 +5,7 @@ require 'uri'
 require 'json'
 require 'date'
 require 'ansi'
+require 'thor'
 
 def sendGithubGraphQLQuery(qry)
   githubApiToken = ENV.fetch("GITHUB_API_TOKEN")
@@ -115,14 +116,23 @@ def show_breakdown(comments, tm)
   return m.collect {|tag,failures| {:tag => tag, :n => failures.length}}.sort_by {|x| x[:n] }.reverse
 end
 
-tm = fetch_gh_ticket_titlemap
-comments = fetch_comments
-show_bors_failures(comments, tm)
+$tm = fetch_gh_ticket_titlemap
+$comments = fetch_comments
 
-puts show_breakdown(comments, tm)
+class BorsStats < Thor
+  desc "list", "list all failures with optional filter (e.g. list 2292)"
+  def list(tag = nil)
+    unless tag.nil? then
+      show_bors_failures($comments.filter {|x| x.tags.include? ('#'+tag) }, $tm)
+    else
+      show_bors_failures($comments, $tm)
+    end
+  end
 
-#for obj in objs do
-#   puts ""
-#   puts obj
-#   puts ""
-#end
+  desc "breakdown", "Group failures by tags and list by frequency"
+  def breakdown
+    puts show_breakdown($comments, $tm)
+  end
+end
+
+BorsStats.start(ARGV)
