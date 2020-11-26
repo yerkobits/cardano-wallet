@@ -85,23 +85,42 @@ def fetch_gh_ticket_titlemap
       }}}
     }}
   END
-  res = sendGithubGraphQLQuery(query)['data']['repository']['issues']['edges']
+  return sendGithubGraphQLQuery(query)['data']['repository']['issues']['edges']
     .map { |x| x['node'] }
-    .group_by { |x| x['number']}
+    .group_by { |x| "#" + x['number'].to_s }
+    .transform_values { |x| x[0] }
 end
 
 def show_bors_failures(comments, titlemap)
   comments.each do |c|
     # Only print the full comment if failure or if no tags
     maybeDetails = (c.succeeded or c.tags.length > 0) ? "" : c.bodyText
-    puts (c.pretty_time + " " + c.pretty_tags + "\n" + maybeDetails)
-  end
+    #key = c.tags.first
+    #title = titlemap.dig key, "title"
+    #title = unless title.nil? then title else "" end
 
+    header = c.pretty_time + " " + c.pretty_tags + " " + ANSI.blue + c.url + ANSI.clear
+
+    puts ("\n" + header + "\n" + maybeDetails + "\n")
+  end
 end
 
-#puts fetch_gh_ticket_titlemap
+def show_breakdown(comments, tm)
+  m = {}
+  comments.each do |c|
+    c.tags.each do |tag|
+      m[tag] = m.fetch(tag, []) + [c]
+    end
+  end
+  return m.collect {|tag,failures| {:tag => tag, :n => failures.length}}.sort_by {|x| x[:n] }.reverse
+end
 
-show_bors_failures(fetch_comments, fetch_gh_ticket_titlemap)
+tm = fetch_gh_ticket_titlemap
+comments = fetch_comments
+show_bors_failures(comments, tm)
+
+puts show_breakdown(comments, tm)
+
 #for obj in objs do
 #   puts ""
 #   puts obj
