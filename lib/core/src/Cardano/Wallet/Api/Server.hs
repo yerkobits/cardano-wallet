@@ -700,9 +700,25 @@ mkShelleyWallet ctx wid cp meta pending progress = do
         -- never fails - returns zero if balance not found
         liftIO $ fmap fromIntegral <$> W.fetchRewardBalance @_ @s @k wrk wid
 
+    let ti = timeInterpreter $ ctx ^. networkLayer @t
 
+    -- In the Shelley era of Byron;Shelley;Allegra toApiWalletDelegation using
+    -- an unextended @ti@ will simply fail because of uncertainty about the next
+    -- fork.
+    --
+    -- @unsafeExtendSafeZone@ performs the calculation as if no fork will occur.
+    -- This should be fine because:
+    -- 1. We expect the next few eras to have the same epoch length as Shelley
+    -- 2. It shouldn't be the end of the world to return the wrong time.
+    --
+    -- But ultimately, we might want to make the uncertainty transparent to API
+    -- users.
     apiDelegation <- liftIO $ toApiWalletDelegation (meta ^. #delegation)
-    tip' <- liftIO $ getWalletTip ti cp
+        (unsafeExtendSafeZone ti)
+
+    tip' <- liftIO $ getWalletTip
+        (neverFails "getWalletTip wallet tip should be behind node tip" ti)
+        cp
     pure ApiWallet
         { addressPoolGap = ApiT $ getState cp ^. #externalPool . #gap
         , balance = ApiT $ WalletBalance
@@ -719,34 +735,13 @@ mkShelleyWallet ctx wid cp meta pending progress = do
         , tip = tip'
         }
   where
-    ti :: TimeInterpreter IO
-    ti = neverFails
-        "conversions for getWalletTip should never fail"
-        (timeInterpreter $ ctx ^. networkLayer @t)
-
-    -- Delegation statuses in the future may fail
-    ti' :: TimeInterpreter IO
-    ti' = unsafeExtendSafeZone
-        (timeInterpreter $ ctx ^. networkLayer @t)
-
-    -- This may fail
-    -- 1. In Byron when running Byron;Shelley
-    -- 2. In Shelley when running Byron;Shelley;SomethingElse
-    --
-    -- But:
-    -- 1. We should never see a delegation certificate in Byron (unless under
-    -- very intricate and rare conditions involving roll-backs and
-    -- raceconditions right at the fork?)
-    -- 2. We are currently only targeting Byron;Shelley.
-    --
-    -- so it shouldn't be a problem.
-    toApiEpochInfo ep = do
-        time <- interpretQuery ti' (firstSlotInEpoch ep >>= startTime)
+    toApiEpochInfo ep ti = do
+        time <- interpretQuery ti (firstSlotInEpoch ep >>= startTime)
         return $ ApiEpochInfo (ApiT ep) time
 
-    toApiWalletDelegation W.WalletDelegation{active,next} = do
+    toApiWalletDelegation W.WalletDelegation{active,next} ti = do
         apiNext <- forM next $ \W.WalletDelegationNext{status,changesAt} -> do
-            info <- toApiEpochInfo changesAt
+            info <- toApiEpochInfo changesAt ti
             return $ toApiWalletDelegationNext (Just info) status
 
         return $ ApiWalletDelegation
@@ -2037,14 +2032,17 @@ mkApiTransaction
     -> IO (ApiTransaction n)
 mkApiTransaction ti txid ins outs ws (meta, timestamp) txMeta setTimeReference = do
     timeRef <- (#time .~ timestamp) <$> makeApiBlockReference
-        (neverFails "makeApiBlockReference shouldn't fail??" ti)
+        (neverFails "makeApiBlockReference shouldn't fail getting the time of \
+            \transactions with slots in the past" ti)
         (meta ^. #slotNo)
         (natural $ meta ^. #blockHeight)
 
     expRef <- traverse makeApiSlotReference' (meta ^. #expiry)
     return $ tx & setTimeReference .~ Just timeRef & #expiresAt .~ expRef
   where
-    makeApiSlotReference' sl = makeApiSlotReference (unsafeExtendSafeZone ti) sl
+    -- Since tx expiry can be far in the future, we use unsafeExtendSafeZone for
+    -- now.
+    makeApiSlotReference' = makeApiSlotReference (unsafeExtendSafeZone ti)
     tx :: ApiTransaction n
     tx = ApiTransaction
         { id = ApiT txid
