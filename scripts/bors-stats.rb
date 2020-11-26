@@ -116,8 +116,23 @@ def show_breakdown(comments, tm)
   return m.collect {|tag,failures| {:tag => tag, :n => failures.length}}.sort_by {|x| x[:n] }.reverse
 end
 
+
+def apply_rules(tags)
+  puts "apply_rules"
+  rules = {
+    "#2337" => ["integration", "timeout", "STAKE_POOLS_GARBAGE_COLLECTION_01"]
+    }
+  tags.each do |t|
+    unless rules[t].nil?
+    then tags += rules[t]
+    end
+  end
+  puts tags
+  return tags
+end
+
 $tm = fetch_gh_ticket_titlemap
-$comments = fetch_comments
+$comments = fetch_comments.map { |c| c.tags = apply_rules(c.tags); c }
 
 class BorsStats < Thor
   desc "list", "list all failures with optional filter (e.g. list 2292)"
