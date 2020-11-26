@@ -108,7 +108,7 @@ import Cardano.Wallet.Primitive.AddressDerivation.Jormungandr
 import Cardano.Wallet.Primitive.AddressDerivation.Shelley
     ( ShelleyKey )
 import Cardano.Wallet.Primitive.Slotting
-    ( TimeInterpreter, epochOf, firstSlotInEpoch, startTime )
+    ( TimeInterpreter, epochOf, firstSlotInEpoch, interpretQuery, startTime )
 import Control.Concurrent.MVar
     ( modifyMVar, modifyMVar_, newMVar, readMVar )
 import Control.Exception
@@ -234,10 +234,10 @@ withDBLayer
     -> ((SqliteContext, DBLayer IO s k) -> IO a)
        -- ^ Action to run.
     -> IO a
-withDBLayer trace defaultFieldValues mDatabaseDir timeInterpreter =
+withDBLayer trace defaultFieldValues mDatabaseDir ti =
     bracket before after
   where
-    before = newDBLayer trace defaultFieldValues mDatabaseDir timeInterpreter
+    before = newDBLayer trace defaultFieldValues mDatabaseDir ti
     after = destroyDBLayer . fst
 
 -- | Instantiate a 'DBFactory' from a given directory
@@ -256,7 +256,7 @@ newDBFactory
     -> Maybe FilePath
        -- ^ Path to database directory, or Nothing for in-memory database
     -> IO (DBFactory IO s k)
-newDBFactory tr defaultFieldValues timeInterpreter = \case
+newDBFactory tr defaultFieldValues ti = \case
     Nothing -> do
         -- NOTE
         -- For the in-memory database, we do actually preserve the database
@@ -271,7 +271,7 @@ newDBFactory tr defaultFieldValues timeInterpreter = \case
                     Just (_, db) -> pure (m, db)
                     Nothing -> do
                         (ctx, db) <-
-                            newDBLayer tr defaultFieldValues Nothing timeInterpreter
+                            newDBLayer tr defaultFieldValues Nothing ti
                         pure (Map.insert wid (ctx, db) m, db)
                 action db
             , removeDatabase = \wid -> do
@@ -289,7 +289,7 @@ newDBFactory tr defaultFieldValues timeInterpreter = \case
                 tr
                 defaultFieldValues
                 (Just $ databaseFile wid)
-                timeInterpreter
+                ti
                 (action . snd)
             , removeDatabase = \wid -> do
                 let widp = pretty wid
@@ -687,7 +687,7 @@ newDBLayer
        -- ^ Path to database file, or Nothing for in-memory database
     -> TimeInterpreter IO
     -> IO (SqliteContext, DBLayer IO s k)
-newDBLayer trace defaultFieldValues mDatabaseFile timeInterpreter = do
+newDBLayer trace defaultFieldValues mDatabaseFile ti = do
     ctx@SqliteContext{runQuery} <-
         either throwIO pure =<<
         startSqliteBackend
@@ -858,8 +858,8 @@ newDBLayer trace defaultFieldValues mDatabaseFile timeInterpreter = do
                 Nothing -> pure Nothing
                 Just cp -> do
                     currentEpoch <- liftIO $
-                        timeInterpreter (epochOf $ cp ^. #currentTip . #slotNo)
-                    readWalletDelegation timeInterpreter wid currentEpoch
+                        interpretQuery ti (epochOf $ cp ^. #currentTip . #slotNo)
+                    readWalletDelegation ti wid currentEpoch
                         >>= readWalletMetadata wid
 
         , putDelegationCertificate = \(PrimaryKey wid) cert sl -> ExceptT $ do
@@ -910,7 +910,7 @@ newDBLayer trace defaultFieldValues mDatabaseFile timeInterpreter = do
             selectLatestCheckpoint wid >>= \case
                 Nothing -> pure []
                 Just cp -> selectTxHistory cp
-                    timeInterpreter wid minWithdrawal order $ catMaybes
+                    ti wid minWithdrawal order $ catMaybes
                     [ (TxMetaSlot >=.) <$> W.inclusiveLowerBound range
                     , (TxMetaSlot <=.) <$> W.inclusiveUpperBound range
                     , (TxMetaStatus ==.) <$> status
@@ -945,7 +945,7 @@ newDBLayer trace defaultFieldValues mDatabaseFile timeInterpreter = do
                 Nothing -> pure $ Left $ ErrNoSuchWallet wid
                 Just cp -> do
                     metas <- selectTxHistory cp
-                        timeInterpreter wid Nothing W.Descending
+                        ti wid Nothing W.Descending
                             [ TxMetaTxId ==. TxId tid ]
                     case metas of
                         [] -> pure (Right Nothing)
@@ -1019,8 +1019,8 @@ readWalletDelegation
 readWalletDelegation ti wid epoch
     | epoch == 0 = pure $ W.WalletDelegation W.NotDelegating []
     | otherwise = do
-        eMinus1 <- liftIO $ ti $ firstSlotInEpoch (epoch - 1)
-        e <- liftIO $ ti $ firstSlotInEpoch epoch
+        eMinus1 <- liftIO $ interpretQuery ti $ firstSlotInEpoch (epoch - 1)
+        e <- liftIO $ interpretQuery ti $ firstSlotInEpoch epoch
         active <- maybe W.NotDelegating toWalletDelegationStatus
             <$> readDelegationCertificate wid
                 [ CertSlot <. eMinus1
@@ -1278,7 +1278,7 @@ txHistoryFromEntity
 txHistoryFromEntity ti tip metas ins outs ws =
     mapM mkItem metas
   where
-    startTime' = ti . startTime
+    startTime' = interpretQuery ti . startTime
     mkItem m = mkTxWith (txMetaTxId m) (txMetaData m) (mkTxDerived m)
     mkTxWith txid meta derived = do
         t <- startTime' (derived ^. #slotNo)

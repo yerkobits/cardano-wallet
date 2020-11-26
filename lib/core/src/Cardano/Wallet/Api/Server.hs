@@ -284,10 +284,15 @@ import Cardano.Wallet.Primitive.Slotting
     , currentEpoch
     , endTimeOfEpoch
     , epochSucc
+    , expectAndThrowFailures
     , firstSlotInEpoch
+    , hoistTimeInterpreter
+    , interpretQuery
+    , neverFails
     , ongoingSlotAt
     , startTime
     , toSlotId
+    , unsafeExtendSafeZone
     )
 import Cardano.Wallet.Primitive.SyncProgress
     ( SyncProgress (..), SyncTolerance, syncProgress )
@@ -345,16 +350,12 @@ import Control.Exception.Safe
     ( tryAnyDeep )
 import Control.Monad
     ( forM, forever, join, void, when, (>=>) )
-import Control.Monad.Catch
-    ( handle, try )
 import Control.Monad.IO.Class
     ( MonadIO, liftIO )
-import Control.Monad.Trans.Class
-    ( lift )
 import Control.Monad.Trans.Except
     ( ExceptT (..), runExceptT, throwE, withExceptT )
 import Control.Monad.Trans.Maybe
-    ( MaybeT (..) )
+    ( MaybeT (..), exceptToMaybeT )
 import Control.Tracer
     ( Tracer )
 import Data.Aeson
@@ -719,7 +720,14 @@ mkShelleyWallet ctx wid cp meta pending progress = do
         }
   where
     ti :: TimeInterpreter IO
-    ti = timeInterpreter (ctx ^. networkLayer @t)
+    ti = neverFails
+        "conversions for getWalletTip should never fail"
+        (timeInterpreter $ ctx ^. networkLayer @t)
+
+    -- Delegation statuses in the future may fail
+    ti' :: TimeInterpreter IO
+    ti' = unsafeExtendSafeZone
+        (timeInterpreter $ ctx ^. networkLayer @t)
 
     -- This may fail
     -- 1. In Byron when running Byron;Shelley
@@ -733,7 +741,7 @@ mkShelleyWallet ctx wid cp meta pending progress = do
     --
     -- so it shouldn't be a problem.
     toApiEpochInfo ep = do
-        time <- ti (firstSlotInEpoch ep >>= startTime)
+        time <- interpretQuery ti' (firstSlotInEpoch ep >>= startTime)
         return $ ApiEpochInfo (ApiT ep) time
 
     toApiWalletDelegation W.WalletDelegation{active,next} = do
@@ -827,7 +835,7 @@ mkLegacyWallet ctx wid cp meta pending progress = do
                     Right{} -> pure Nothing
                     Left{} -> pure $ Just $ ApiWalletPassphraseInfo time
 
-    tip' <- liftIO $ getWalletTip ti cp
+    tip' <- liftIO $ getWalletTip (expectAndThrowFailures ti) cp
     pure ApiByronWallet
         { balance = ApiByronWalletBalance
             { available = Quantity $ availableBalance pending cp
@@ -841,8 +849,8 @@ mkLegacyWallet ctx wid cp meta pending progress = do
         , discovery = knownDiscovery @s
         }
   where
-    ti :: TimeInterpreter IO
-    ti = timeInterpreter (ctx ^. networkLayer @t)
+    ti :: TimeInterpreter (ExceptT PastHorizonException IO)
+    ti = timeInterpreter $ ctx ^. networkLayer @t
 
     matchEmptyPassphrase
         :: WorkerCtx ctx
@@ -1390,7 +1398,7 @@ postTransaction ctx genChange (ApiT wid) body = do
         W.submitTx @_ @s @t @k wrk wid (tx, meta, wit)
 
     liftIO $ mkApiTransaction
-        ti
+        (timeInterpreter $ ctx ^. networkLayer @t)
         (txId tx)
         (fmap Just <$> selection ^. #inputs)
         (tx ^. #outputs)
@@ -1398,9 +1406,6 @@ postTransaction ctx genChange (ApiT wid) body = do
         (meta, time)
         (tx ^. #metadata)
         #pendingSince
-  where
-    ti :: TimeInterpreter IO
-    ti = timeInterpreter (ctx ^. networkLayer @t)
 
 deleteTransaction
     :: forall ctx s t k. ctx ~ ApiLayer s t k
@@ -1429,15 +1434,10 @@ listTransactions ctx (ApiT wid) mMinWithdrawal mStart mEnd mOrder = do
             (getIso8601Time <$> mStart)
             (getIso8601Time <$> mEnd)
             (maybe defaultSortOrder getApiT mOrder)
-    liftIO $ mapM (mkApiTransactionFromInfo ti) txs
+    liftIO $ mapM (mkApiTransactionFromInfo (timeInterpreter (ctx ^. networkLayer @t))) txs
   where
     defaultSortOrder :: SortOrder
     defaultSortOrder = Descending
-
-    -- In the Shelley of Byron;Shelley this is fine, but otherwise,
-    -- supplying a time range in the future may cause a err500.
-    ti :: TimeInterpreter IO
-    ti = timeInterpreter (ctx ^. networkLayer @t)
 
 getTransaction
     :: forall ctx s t k n. (ctx ~ ApiLayer s t k)
@@ -1448,20 +1448,17 @@ getTransaction
 getTransaction ctx (ApiT wid) (ApiTxId (ApiT (tid))) = do
     tx <- withWorkerCtx ctx wid liftE liftE $ \wrk -> liftHandler $
         W.getTransaction wrk wid tid
-    liftIO $ mkApiTransactionFromInfo ti tx
-  where
-    ti :: TimeInterpreter IO
-    ti = timeInterpreter (ctx ^. networkLayer @t)
+    liftIO $ mkApiTransactionFromInfo (timeInterpreter (ctx ^. networkLayer @t)) tx
 
 -- Populate an API transaction record with 'TransactionInfo' from the wallet
 -- layer.
 mkApiTransactionFromInfo
-    :: Monad m
-    => TimeInterpreter m
+    :: MonadIO m
+    => TimeInterpreter (ExceptT PastHorizonException IO)
     -> TransactionInfo
     -> m (ApiTransaction n)
 mkApiTransactionFromInfo ti (TransactionInfo txid ins outs ws meta depth txtime txmeta) = do
-    apiTx <- mkApiTransaction ti txid (drop2nd <$> ins) outs ws (meta, txtime) txmeta $
+    apiTx <- liftIO $ mkApiTransaction ti txid (drop2nd <$> ins) outs ws (meta, txtime) txmeta $
         case meta ^. #status of
             Pending  -> #pendingSince
             InLedger -> #insertedAt
@@ -1559,7 +1556,7 @@ joinStakePool ctx knownPools getPoolStatus apiPoolId (ApiT wid) body = do
         pure (tx, txMeta, txTime)
 
     liftIO $ mkApiTransaction
-        ti
+        (timeInterpreter (ctx ^. networkLayer @t))
         (txId tx)
         (second (const Nothing) <$> tx ^. #resolvedInputs)
         (tx ^. #outputs)
@@ -1569,11 +1566,6 @@ joinStakePool ctx knownPools getPoolStatus apiPoolId (ApiT wid) body = do
         #pendingSince
   where
     genChange = delegationAddress @n
-
-    -- Not forecasting into the future. Should be safe.
-    ti :: TimeInterpreter IO
-    ti = timeInterpreter (ctx ^. networkLayer @t)
-
 
 delegationFee
     :: forall ctx s t n k.
@@ -1623,9 +1615,8 @@ quitStakePool ctx (ApiT wid) body = do
 
         pure (tx, txMeta, txTime)
 
-
     liftIO $ mkApiTransaction
-        ti
+        (timeInterpreter (ctx ^. networkLayer @t))
         (txId tx)
         (second (const Nothing) <$> tx ^. #resolvedInputs)
         (tx ^. #outputs)
@@ -1635,10 +1626,6 @@ quitStakePool ctx (ApiT wid) body = do
         #pendingSince
   where
     genChange = delegationAddress @n
-
-    -- Not forecasting into the future. Should be safe.
-    ti :: TimeInterpreter IO
-    ti = timeInterpreter (ctx ^. networkLayer @t)
 
 {-------------------------------------------------------------------------------
                                 Migrations
@@ -1700,7 +1687,7 @@ migrateWallet ctx (ApiT wid) migrateData = do
         withWorkerCtx ctx wid liftE liftE
             $ \wrk -> liftHandler $ W.submitTx @_ @_ @t wrk wid (tx, meta, wit)
         liftIO $ mkApiTransaction
-            ti
+            (timeInterpreter (ctx ^. networkLayer @t))
             (txId tx)
             (fmap Just <$> NE.toList (W.unsignedInputs cs))
             (W.unsignedOutputs cs)
@@ -1711,10 +1698,6 @@ migrateWallet ctx (ApiT wid) migrateData = do
   where
     pwd = coerce $ getApiT $ migrateData ^. #passphrase
     addrs = getApiT . fst <$> migrateData ^. #addresses
-    -- Not forecasting into the future. Should be safe.
-    ti :: TimeInterpreter IO
-    ti = timeInterpreter (ctx ^. networkLayer @t)
-
 
 -- | Transform the given set of migration coin selections (for a source wallet)
 --   into a set of coin selections that will migrate funds to the specified
@@ -1761,13 +1744,12 @@ getCurrentEpoch
     => ctx
     -> Handler W.EpochNo
 getCurrentEpoch ctx = do
-    res <- liftIO $ try $ currentEpoch ti
-    case res of
+    liftIO (runExceptT (currentEpoch ti)) >>= \case
         Right Nothing  -> liftE ErrUnableToDetermineCurrentEpoch
         Right (Just x) -> pure x
         Left e@(S.PastHorizon{}) -> liftE (ErrCurrentEpochPastHorizonException e)
   where
-    ti :: TimeInterpreter IO
+    ti :: TimeInterpreter (ExceptT PastHorizonException IO)
     ti = timeInterpreter (ctx ^. networkLayer @t)
 
 getNetworkInformation
@@ -1778,10 +1760,15 @@ getNetworkInformation
 getNetworkInformation st nl = do
     now <- liftIO getCurrentTime
     nodeTip <-  liftHandler (NW.currentNodeTip nl)
-    apiNodeTip <- liftIO $ makeApiBlockReferenceFromHeader ti nodeTip
+    apiNodeTip <- liftIO $ makeApiBlockReferenceFromHeader
+        (neverFails "node tip is within safe-zone" $ timeInterpreter nl)
+        nodeTip
     nowInfo <- liftIO $ runMaybeT $ networkTipInfo now
-    progress <- handle (\(_ :: PastHorizonException) -> pure NotResponding)
-        $ liftIO (syncProgress st ti nodeTip now)
+    progress <- liftIO $ syncProgress
+            st
+            (neverFails "syncProgress" $ timeInterpreter nl)
+            nodeTip
+            now
     pure $ Api.ApiNetworkInformation
         { Api.syncProgress = ApiT progress
         , Api.nextEpoch = snd <$> nowInfo
@@ -1789,27 +1776,24 @@ getNetworkInformation st nl = do
         , Api.networkTip = fst <$> nowInfo
         }
   where
-    ti :: TimeInterpreter IO
-    ti = timeInterpreter nl
+    ti :: TimeInterpreter (MaybeT IO)
+    ti = hoistTimeInterpreter exceptToMaybeT $ timeInterpreter nl
 
     -- (network tip, next epoch)
     -- May be unavailible if the node is still syncing.
     networkTipInfo :: UTCTime -> MaybeT IO (ApiSlotReference, ApiEpochInfo)
-    networkTipInfo now = handle handlePastHorizonException $ do
-        networkTipSlot <- MaybeT (ti $ ongoingSlotAt now)
-        tip <- lift $ makeApiSlotReference ti networkTipSlot
+    networkTipInfo now = do
+        networkTipSlot <- join' $ interpretQuery ti $ ongoingSlotAt now
+        tip <- makeApiSlotReference ti networkTipSlot
         let curEpoch = tip ^. #slotId . #epochNumber . #getApiT
-        nextEpochStart <- lift $ ti $ endTimeOfEpoch curEpoch
+        nextEpochStart <- interpretQuery ti $ endTimeOfEpoch curEpoch
         let nextEpoch = ApiEpochInfo
                 (ApiT $ unsafeEpochSucc curEpoch)
                 (nextEpochStart)
         return (tip, nextEpoch)
       where
-        handlePastHorizonException
-            :: PastHorizonException
-            -> MaybeT IO (ApiSlotReference, ApiEpochInfo)
-        handlePastHorizonException _ =
-            MaybeT (pure Nothing)
+        join' :: Monad m => MaybeT m (Maybe a) -> MaybeT m a
+        join' x = x >>= (MaybeT . pure)
 
     -- Unsafe constructor for the next epoch. Chances to reach the last epoch
     -- are quite unlikely in this context :)
@@ -1823,26 +1807,25 @@ getNetworkParameters
     -> Handler ApiNetworkParameters
 getNetworkParameters (_block0, genesisNp, _st) nl = do
     pp <- liftIO $ NW.getProtocolParameters nl
-    sp <- liftIO $ ignorePastHorizon $ NW.getSlottingParametersForTip nl
+    sp <- liftIO $ NW.getSlottingParametersForTip nl
     let (apiNetworkParams, epochNoM) = toApiNetworkParameters genesisNp
             { protocolParameters = pp, slottingParameters = sp }
     case epochNoM of
         Just epochNo -> do
-            epochStartTime <-
-                liftIO $ timeInterpreter nl
-                (firstSlotInEpoch epochNo >>= startTime)
+            epochStartTime <- liftIO $
+                interpretQuery ti (firstSlotInEpoch epochNo >>= startTime)
             pure $ apiNetworkParams
                 { hardforkAt = Just $
                     ApiEpochInfo (ApiT epochNo) epochStartTime }
         Nothing ->
             pure apiNetworkParams
   where
-    -- A PastHorizonException should never happen here because the ledger is
-    -- being queried for slotting info about its own tip.  So we return the
-    -- genesis slotting parameters as a fallback.
-    ignorePastHorizon = handle pastHorizon
-    pastHorizon :: PastHorizonException -> IO W.SlottingParameters
-    pastHorizon _ = pure (slottingParameters genesisNp)
+    ti :: TimeInterpreter IO
+    ti = neverFails
+        "PastHorizonException should never happen in getNetworkParameters \
+        \because the ledger is being queried for slotting info about its own \
+        \tip."
+        (timeInterpreter nl)
 
 getNetworkClock :: NtpClient -> Bool -> Handler ApiNetworkClock
 getNetworkClock client = liftIO . getNtpStatus client
@@ -2042,8 +2025,8 @@ mkApiCoinSelection mcerts (UnsignedTx inputs outputs change) =
             }
 
 mkApiTransaction
-    :: forall n m. Monad m
-    => TimeInterpreter m
+    :: forall n. ()
+    => TimeInterpreter (ExceptT PastHorizonException IO)
     -> Hash "Tx"
     -> [(TxIn, Maybe TxOut)]
     -> [TxOut]
@@ -2051,14 +2034,17 @@ mkApiTransaction
     -> (W.TxMeta, UTCTime)
     -> Maybe W.TxMetadata
     -> Lens' (ApiTransaction n) (Maybe ApiBlockReference)
-    -> m (ApiTransaction n)
+    -> IO (ApiTransaction n)
 mkApiTransaction ti txid ins outs ws (meta, timestamp) txMeta setTimeReference = do
-    timeRef <- (#time .~ timestamp) <$> makeApiBlockReference ti
+    timeRef <- (#time .~ timestamp) <$> makeApiBlockReference
+        (neverFails "makeApiBlockReference shouldn't fail??" ti)
         (meta ^. #slotNo)
         (natural $ meta ^. #blockHeight)
-    expRef <- traverse (makeApiSlotReference ti) (meta ^. #expiry)
+
+    expRef <- traverse makeApiSlotReference' (meta ^. #expiry)
     return $ tx & setTimeReference .~ Just timeRef & #expiresAt .~ expRef
   where
+    makeApiSlotReference' sl = makeApiSlotReference (unsafeExtendSafeZone ti) sl
     tx :: ApiTransaction n
     tx = ApiTransaction
         { id = ApiT txid
@@ -2110,8 +2096,8 @@ makeApiBlockReference
     -> Quantity "block" Natural
     -> m ApiBlockReference
 makeApiBlockReference ti sl height = do
-    slotId <- ti (toSlotId sl)
-    slotTime <- ti (startTime sl)
+    slotId <- interpretQuery ti (toSlotId sl)
+    slotTime <- interpretQuery ti (startTime sl)
     return $ ApiBlockReference
         { absoluteSlotNumber = ApiT sl
         , slotId = apiSlotId slotId
@@ -2134,8 +2120,8 @@ makeApiSlotReference
     -> m ApiSlotReference
 makeApiSlotReference ti sl =
     ApiSlotReference (ApiT sl)
-        <$> fmap apiSlotId (ti $ toSlotId sl)
-        <*> ti (startTime sl)
+        <$> fmap apiSlotId (interpretQuery ti $ toSlotId sl)
+        <*> interpretQuery ti (startTime sl)
 
 getWalletTip
     :: Monad m

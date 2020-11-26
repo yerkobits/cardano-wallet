@@ -17,7 +17,7 @@ import Cardano.Wallet.Gen
     , shrinkSlotNo
     )
 import Cardano.Wallet.Primitive.Slotting
-    ( TimeInterpreter, singleEraInterpreter, startTime )
+    ( TimeInterpreter, interpretQuery, singleEraInterpreter, startTime )
 import Cardano.Wallet.Primitive.SyncProgress
     ( SyncProgress (..), SyncTolerance (..), syncProgress )
 import Cardano.Wallet.Primitive.Types
@@ -66,6 +66,7 @@ spec = do
 
 
     let ti = (singleEraInterpreter (StartTime t0) sp :: TimeInterpreter Identity)
+    let runQry = runIdentity . interpretQuery ti
     describe "syncProgress" $ do
         it "works for any two slots" $ property $ \tip (dt :: NominalDiffTime) ->
             let
@@ -83,25 +84,25 @@ spec = do
 
         it "unit test #1 - 0/10   0%" $ do
             let tip = mkTip (SlotNo 0)
-            let ntwkTime = runIdentity $ ti $ startTime $ SlotNo 10
+            let ntwkTime = runQry $ startTime $ SlotNo 10
             runIdentity (syncProgress tolerance ti tip ntwkTime)
                 `shouldBe` Syncing (Quantity $ unsafeMkPercentage 0)
 
         it "unit test #2 - 10/20 50%" $ do
             let tip = mkTip (SlotNo 10)
-            let ntwkTime = runIdentity $ ti $ startTime $ SlotNo 20
+            let ntwkTime = runQry $ startTime $ SlotNo 20
             runIdentity (syncProgress tolerance ti tip ntwkTime)
                 `shouldBe` Syncing (Quantity $ unsafeMkPercentage 0.5)
 
         it "unit test #4 - 10/10 100%" $ do
             let tip = mkTip (SlotNo 10)
-            let ntwkTime = runIdentity $ ti $ startTime $ SlotNo 10
+            let ntwkTime = runQry $ startTime $ SlotNo 10
             runIdentity (syncProgress tolerance ti tip ntwkTime)
                 `shouldBe` Ready
 
         it "unit test #4 - 11/10 100%" $ do
             let tip = mkTip (SlotNo 11)
-            let ntwkTime = runIdentity $ ti $ startTime $ SlotNo 10
+            let ntwkTime = runQry $ startTime $ SlotNo 10
             runIdentity (syncProgress tolerance ti tip ntwkTime)
                 `shouldBe` Ready
 
@@ -133,7 +134,7 @@ spec = do
                     , (mkTip (SlotNo 10), 1.0)
                     ]
             forM_ plots $ \(nodeTip, p) -> do
-                let ntwkTime = runIdentity $ ti $ startTime $ SlotNo 10
+                let ntwkTime = runQry $ startTime $ SlotNo 10
                 let progress = if p == 1
                         then Ready
                         else Syncing (Quantity $ unsafeMkPercentage p)
@@ -146,7 +147,7 @@ spec = do
             -- Very short chains on jormungandr will probably see the
             -- syncProgress immediately jump to 90%, and then slowly continue,
             -- but seems like an acceptable sacrifice. The ITN is long anyway.
-            let ntwkTime = runIdentity $ ti $ startTime $ SlotNo 10
+            let ntwkTime = runQry $ startTime $ SlotNo 10
             let plots =
                     [ (mkTip (SlotNo 8), 0)
                     , (mkTip (SlotNo 9), 0)
@@ -163,7 +164,7 @@ spec = do
 
         it "unit test #7 - 1k/2M 0.5% (regression for overflow issue)" $ do
             let tip = mkTip (SlotNo 1_000)
-            let ntwkTime = runIdentity $ ti $ startTime $ SlotNo 2_000_000
+            let ntwkTime = runQry $ startTime $ SlotNo 2_000_000
             runIdentity (syncProgress tolerance ti tip ntwkTime)
                 `shouldBe` Syncing (Quantity $ unsafeMkPercentage 0.0005)
 

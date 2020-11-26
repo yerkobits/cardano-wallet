@@ -1,11 +1,12 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedLabels #-}
+{-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE Rank2Types #-}
 
 -- |
@@ -37,6 +38,14 @@ module Cardano.Wallet.Primitive.Slotting
     , mkTimeInterpreter
     , HF.PastHorizonException (..)
     , Qry
+    , interpretQuery
+
+    , TimeInterpreterLog (..)
+
+    , unsafeExtendSafeZone
+    , neverFails
+    , hoistTimeInterpreter
+    , expectAndThrowFailures
 
     -- ** Helpers
     , unsafeEpochNo
@@ -62,6 +71,10 @@ module Cardano.Wallet.Primitive.Slotting
 
 import Prelude
 
+import Cardano.BM.Data.Severity
+    ( Severity (..) )
+import Cardano.BM.Data.Tracer
+    ( HasSeverityAnnotation (..) )
 import Cardano.Wallet.Orphans
     ()
 import Cardano.Wallet.Primitive.Types
@@ -78,10 +91,16 @@ import Cardano.Wallet.Primitive.Types
     , unsafeEpochNo
     , wholeRange
     )
+import Control.Exception
+    ( throwIO )
 import Control.Monad
-    ( ap, liftM, (<=<) )
+    ( ap, liftM, (<=<), (>=>) )
 import Control.Monad.IO.Class
     ( MonadIO, liftIO )
+import Control.Monad.Trans.Except
+    ( ExceptT (..), runExceptT )
+import Control.Tracer
+    ( Tracer, contramap, nullTracer, traceWith )
 import Data.Coerce
     ( coerce )
 import Data.Functor.Identity
@@ -92,6 +111,8 @@ import Data.Maybe
     ( fromMaybe )
 import Data.Quantity
     ( Quantity (..) )
+import Data.Text.Class
+    ( ToText (..) )
 import Data.Time.Clock
     ( NominalDiffTime, UTCTime, addUTCTime, diffUTCTime, getCurrentTime )
 import Data.Word
@@ -110,6 +131,7 @@ import Ouroboros.Consensus.HardFork.History.Summary
     ( neverForksSummary )
 
 import qualified Cardano.Slotting.Slot as Cardano
+import qualified Data.Text as T
 import qualified Ouroboros.Consensus.BlockchainTime.WallClock.Types as Cardano
 import qualified Ouroboros.Consensus.HardFork.History.Qry as HF
 
@@ -122,8 +144,11 @@ import qualified Ouroboros.Consensus.HardFork.History.Qry as HF
 -- Queries
 --
 
-currentEpoch :: MonadIO m => TimeInterpreter m -> m (Maybe EpochNo)
-currentEpoch ti = ti . epochAt =<< liftIO getCurrentTime
+currentEpoch
+    :: MonadIO m
+    => TimeInterpreter (ExceptT HF.PastHorizonException m)
+    -> ExceptT HF.PastHorizonException m (Maybe EpochNo)
+currentEpoch ti = interpretQuery ti . epochAt =<< liftIO getCurrentTime
 
 epochAt :: UTCTime -> Qry (Maybe EpochNo)
 epochAt = traverse epochOf <=< ongoingSlotAt
@@ -152,21 +177,40 @@ startTime s = do
 -- the next epoch may be outside the forecast range, and result in
 -- @PastHorizonException@.
 endTimeOfEpoch :: EpochNo -> Qry UTCTime
-endTimeOfEpoch epoch = do
-    ref <- firstSlotInEpoch epoch
-    refTime <- startTime ref
-    el <- HardForkQry $ HF.qryFromExpr $ HF.EEpochSize $ HF.ELit $ toCardanoEpochNo epoch
-    sl <- HardForkQry $ HF.qryFromExpr $ HF.ESlotLength $ HF.ELit ref
-
-    let convert = fromRational . toRational
-    let el' = convert $ Cardano.unEpochSize el
-    let sl' = Cardano.getSlotLength sl
-
-    let timeInEpoch = el' * sl'
-
-    return $ timeInEpoch `addUTCTime` refTime
+endTimeOfEpoch epoch' = do
+    ref <- firstSlotInEpoch epoch'
+    forecastStartTimeOfEpoch ref (epoch' + 1)
   where
-    toCardanoEpochNo (EpochNo e) = Cardano.EpochNo $ fromIntegral e
+    -- | The duration of an Epoch in time as opposed to in slots.
+    epochDuration :: EpochNo -> Qry NominalDiffTime
+    epochDuration epoch = do
+        slot <- firstSlotInEpoch epoch
+        el <- HardForkQry $ HF.qryFromExpr $ HF.EEpochSize $ HF.ELit
+            $ toCardanoEpochNo epoch
+        sl <- HardForkQry $ HF.qryFromExpr $ HF.ESlotLength $ HF.ELit slot
+
+        let convert = fromRational . toRational
+        let el' = convert $ Cardano.unEpochSize el
+        let sl' = Cardano.getSlotLength sl
+
+        return $ el' * sl'
+      where
+        toCardanoEpochNo (EpochNo e) = Cardano.EpochNo $ fromIntegral e
+
+    --
+    --   |  * |    |     |     |
+    --     tip
+    --     e    e+1  e+2   e+3  e+4
+    --
+    forecastStartTimeOfEpoch :: SlotNo -> EpochNo -> Qry UTCTime
+    forecastStartTimeOfEpoch ref e = do
+        refEpoch <- epochOf ref
+        timePerEpoch <- epochDuration refEpoch
+        let deltaEpochs = fromIntegral $ unEpochNo e - unEpochNo refEpoch
+
+        refEpochStart <- startTime =<< firstSlotInEpoch refEpoch
+
+        return $ (deltaEpochs * timePerEpoch) `addUTCTime` refEpochStart
 
 -- | Translate 'EpochNo' to the 'SlotNo' of the first slot in that epoch
 firstSlotInEpoch :: EpochNo -> Qry SlotNo
@@ -274,7 +318,107 @@ queryEpochLength sl = fmap toEpochLength $ HardForkQry $ do
 --
 -- This may or may not be what we actually want.
 --
-type TimeInterpreter m = forall a. Qry a -> m a
+data TimeInterpreter m = forall eras. TimeInterpreter
+    { interpreter :: m (Interpreter eras)
+    , blockchainStartTime :: SystemStart
+    , tracer :: Tracer IO TimeInterpreterLog
+
+      -- | To allow the tracer to be transformed by @TimeInterpreter@
+      -- combinators, we need to pass in a new @Tracer@ value here, supplied by
+      -- @interpretQuery@. We could also have the reference be the entire
+      -- @TimeInTimeInterpreter@, but for now that is not needed.
+    , handler
+        :: forall a. Tracer IO TimeInterpreterLog
+        -> Either HF.PastHorizonException a
+        -> m a
+    }
+
+data TimeInterpreterLog
+    = MsgInterpreterPastHorizon
+        (Maybe String) -- ^ Reason for why the failure should be impossible
+        HF.PastHorizonException
+
+instance HasSeverityAnnotation TimeInterpreterLog where
+    getSeverityAnnotation = \case
+        MsgInterpreterPastHorizon Nothing _ -> Notice
+        MsgInterpreterPastHorizon _ _ -> Error
+
+instance ToText TimeInterpreterLog where
+    toText = \case
+        MsgInterpreterPastHorizon Nothing e -> mconcat
+            [ "Time interpreter queried past the horizon. "
+            , "Full error is: "
+            , T.pack (show e)
+            ]
+        MsgInterpreterPastHorizon (Just reason) e -> mconcat
+            [ "Time interpreter queried past the horizon. "
+            , "This should not happen because "
+            , T.pack reason
+            , " Full error is: "
+            , T.pack (show e)
+            ]
+
+interpretQuery
+    :: HasCallStack
+    => Monad m
+    => TimeInterpreter m
+    -> Qry a
+    -> m a
+interpretQuery (TimeInterpreter getI start tr handleRes) qry = do
+    i <- getI
+    handleRes tr $ runQuery start i qry
+
+neverFails
+    :: String
+    -> TimeInterpreter (ExceptT HF.PastHorizonException IO)
+    -> TimeInterpreter IO
+neverFails reason = f . hoistTimeInterpreter (runExceptT >=> eitherToIO)
+  where
+    eitherToIO (Right x) = pure x
+    eitherToIO (Left e) = throwIO e
+
+    f (TimeInterpreter getI ss tr handler) = TimeInterpreter
+        { interpreter = getI
+        , blockchainStartTime = ss
+        , tracer = contramap (setReason reason) tr
+        , handler = handler
+        }
+    setReason r (MsgInterpreterPastHorizon _ e)
+        = MsgInterpreterPastHorizon (Just r) e
+
+expectAndThrowFailures
+    :: TimeInterpreter (ExceptT HF.PastHorizonException IO)
+    -> TimeInterpreter IO
+expectAndThrowFailures = hoistTimeInterpreter (runExceptT >=> eitherToIO)
+  where
+    eitherToIO (Right x) = pure x
+    eitherToIO (Left e) = throwIO e
+
+hoistTimeInterpreter
+    :: (forall a. m a -> n a)
+    -> TimeInterpreter m
+    -> TimeInterpreter n
+hoistTimeInterpreter f (TimeInterpreter getI ss tr handler) = TimeInterpreter
+    { interpreter = f getI
+     -- NOTE: interpreter ti cannot throw PastHorizonException, but
+     -- this way we don't have to carry around yet another type parameter.
+    , blockchainStartTime = ss
+    , tracer = tr
+    , handler = \tr' -> f . handler tr'
+    }
+
+unsafeExtendSafeZone
+    :: TimeInterpreter (ExceptT HF.PastHorizonException IO)
+    -> TimeInterpreter IO
+unsafeExtendSafeZone = f . neverFails r
+  where
+    f (TimeInterpreter i b t h) = TimeInterpreter
+        { interpreter = HF.unsafeExtendSafeZone <$> i
+        , blockchainStartTime = b
+        , tracer = t
+        , handler = h
+        }
+    r = "unsafeExtendSafeZone should make PastHorizonExceptions impossible."
 
 -- | An 'Interpreter' for a single era, where the slotting from
 -- @GenesisParameters@ cannot change.
@@ -294,22 +438,35 @@ singleEraInterpreter genesisBlockTime sp = mkTimeInterpreterI (mkInterpreter sum
 
     mkTimeInterpreterI
         :: HasCallStack
-        => Interpreter xs
+        => Interpreter eras
         -> TimeInterpreter Identity
-    mkTimeInterpreterI int q = neverFails $ runQuery start int q
+    mkTimeInterpreterI int = TimeInterpreter
+        { interpreter = pure int
+        , blockchainStartTime = start
+        , tracer = nullTracer
+        , handler = \_tr -> neverFails'
+        }
       where
         start = coerce genesisBlockTime
-
-        neverFails = either bomb pure
+        neverFails' = either bomb pure
         bomb x = error $ "singleEraInterpreter: the impossible happened: " <> show x
 
 mkTimeInterpreter
-    :: HasCallStack
-    => StartTime
-    -> Interpreter xs
-    -> TimeInterpreter (Either HF.PastHorizonException)
-mkTimeInterpreter start =
-    runQuery (coerce start)
+    :: Tracer IO TimeInterpreterLog
+    -> StartTime
+    -> IO (Interpreter eras)
+    -> TimeInterpreter (ExceptT HF.PastHorizonException IO)
+mkTimeInterpreter tr start int = TimeInterpreter
+        { interpreter = liftIO int
+        , blockchainStartTime = coerce start
+        , tracer = tr
+        , handler = \tr' x -> ExceptT $ do
+            case x of
+                Left e -> liftIO $ traceWith tr' $
+                    MsgInterpreterPastHorizon Nothing e
+                Right _ -> return ()
+            pure x
+        }
 
 -- | Wrapper around HF.Qry to allow converting times relative to the genesis
 -- block date to absolute ones
@@ -339,7 +496,7 @@ runQuery
     -> Either HF.PastHorizonException a
 runQuery systemStart int = go
   where
-    go :: Qry a -> Either HF.PastHorizonException a
+    go :: HasCallStack => Qry a -> Either HF.PastHorizonException a
     go (HardForkQry q) = HF.interpretQuery int q
     go (QPure a) =
         return a

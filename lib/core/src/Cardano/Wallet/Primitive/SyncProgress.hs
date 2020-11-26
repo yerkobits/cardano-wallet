@@ -21,7 +21,7 @@ module Cardano.Wallet.Primitive.SyncProgress
 import Prelude
 
 import Cardano.Wallet.Primitive.Slotting
-    ( TimeInterpreter, startTime )
+    ( TimeInterpreter, interpretQuery, startTime )
 import Cardano.Wallet.Primitive.Types
     ( BlockHeader (..), SlotNo (..) )
 import Control.DeepSeq
@@ -128,9 +128,9 @@ syncProgress
         -- ^ Current Time
     -> m SyncProgress
 syncProgress (SyncTolerance tolerance) ti tip now = do
-    tipTime <- ti $ startTime $ slotNo tip
+    tipTime <- interpretQuery ti $ startTime $ slotNo tip
     let timeRemaining = now `diffUTCTime` tipTime
-    genesisDate <- ti $ startTime $ SlotNo 0
+    genesisDate <- interpretQuery ti $ startTime $ SlotNo 0
     let timeCovered = tipTime `diffUTCTime` genesisDate
 
     -- Using (max 1) to avoid division by 0.
