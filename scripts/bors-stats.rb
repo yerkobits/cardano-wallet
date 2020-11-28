@@ -64,7 +64,7 @@ def fetch_comments
       .filter { |x| x['author']['login'] == "iohk-bors" }
       .map do |x|
         body = x['bodyText']
-        tags = body.scan(/^#[\d\w]+/).to_a
+        tags = body.scan(/^#[\d\w\-]+/).to_a
         createdAt = DateTime.parse(x['createdAt'])
         succ = x['bodyText'].include? "Build succeeded"
         BorsComment.new(x['url'], body, createdAt, tags, succ)
@@ -118,7 +118,6 @@ end
 
 
 def apply_rules(tags)
-  puts "apply_rules"
   rules = {
     "#2337" => ["integration", "timeout", "STAKE_POOLS_GARBAGE_COLLECTION_01"]
     }
@@ -127,12 +126,19 @@ def apply_rules(tags)
     then tags += rules[t]
     end
   end
-  puts tags
   return tags
 end
 
+
+def bold(s)
+  ANSI.bold + s + ANSI.clear
+end
+def yellow(s)
+  ANSI.yellow + s + ANSI.clear
+end
+
 $tm = fetch_gh_ticket_titlemap
-$comments = fetch_comments.map { |c| c.tags = apply_rules(c.tags); c }
+$comments = fetch_comments #.map { |c| c.tags = apply_rules(c.tags); c }
 
 class BorsStats < Thor
   desc "list", "list all failures with optional filter (e.g. list 2292)"
@@ -146,7 +152,15 @@ class BorsStats < Thor
 
   desc "breakdown", "Group failures by tags and list by frequency"
   def breakdown
-    puts show_breakdown($comments, $tm)
+    show_breakdown($comments, $tm).each do |k,v|
+      t = k[:tag]
+      n = k[:n]
+      nTot = $comments.count
+      failureRate = '%.0f%%' % (100.0 * n / nTot)
+      title = $tm.dig t, "title"
+      title = title.nil? ? "" : title
+      puts (bold(n.to_s) + " times (" + bold(failureRate.to_s) + ") " + yellow(t) + " " + bold(title))
+    end
   end
 end
 
