@@ -28,7 +28,7 @@ import System.FilePath
 import System.Info
     ( os )
 import System.Process
-    ( CreateProcess (..), proc )
+    ( CreateProcess (..), ProcessHandle, proc )
 
 -- | Parameters for connecting to the node.
 newtype CardanoNodeConn = CardanoNodeConn
@@ -76,14 +76,14 @@ withCardanoNode
     :: Tracer IO LauncherLog
     -- ^ Trace for subprocess control logging
     -> CardanoNodeConfig
-    -> (CardanoNodeConn -> IO a)
+    -> ((CardanoNodeConn, ProcessHandle) -> IO a)
     -- ^ Callback function with a socket filename and genesis params
     -> IO (Either ProcessHasExited a)
 withCardanoNode tr cfg action = do
     let socketPath = nodeSocketPath (nodeDir cfg)
     cp <- cardanoNodeProcess cfg socketPath
-    withBackendCreateProcess tr cp $ \_ _ -> action $ CardanoNodeConn socketPath
-
+    withBackendCreateProcess tr cp $ \_ h ->
+        action (CardanoNodeConn socketPath, h)
 {-------------------------------------------------------------------------------
                                     Helpers
 -------------------------------------------------------------------------------}

@@ -538,14 +538,20 @@ withCluster tr severity poolConfigs dir logFile onByron onFork onClusterStart =
         (port0:ports) <- randomUnusedTCPPorts (poolCount + 2)
         systemStart <- addUTCTime 1 <$> getCurrentTime
         let bftCfg = NodeParams severity systemStart (head $ rotate ports) logFile
-        withBFTNode tr dir bftCfg $ \bftSocket block0 params -> do
-            let runningBftNode = RunningNode bftSocket block0 params
+        withBFTNode tr dir bftCfg $ \runningBftNode -> do
+            let RunningNode bftSocket block0 params (RestartNodeForVersion restart) = runningBftNode
             waitForSocket tr bftSocket *> onByron runningBftNode
 
             traceWith tr MsgWaitingForFork
-            updateVersion tr dir
+            updateVersion TmpByron tr dir
             let sp = slottingParameters $ fst params
+
             waitForHardFork bftSocket sp 1 *> onFork runningBftNode
+            threadDelay 60000000
+            putStrLn "shelley?"
+            updateVersion TmpShelley tr dir
+            waitForHardFork bftSocket sp 1
+            putStrLn "allegra?"
 
             setEnv "CARDANO_NODE_SOCKET_PATH" bftSocket
             (rawTx, faucetPrv) <- prepareKeyRegistration tr dir
@@ -879,8 +885,37 @@ withSMASH tr action =
     envVar :: String
     envVar = "CARDANO_WALLET_SMASH_URL"
 
-updateVersion :: Tracer IO ClusterLog -> FilePath -> IO ()
-updateVersion tr tmpDir = do
+
+data TmpEra = TmpByron | TmpShelley
+
+updateVersion :: TmpEra -> Tracer IO ClusterLog -> FilePath -> IO ()
+updateVersion TmpShelley tr tmpDir = do
+    let _network = "--mainnet"
+    let txPath = tmpDir </> "allegra-transition-tx"
+    source <- getShelleyTestDataPath
+    let updatePath = source </> "proposal"
+
+    let sinkPrv = tmpDir </> "sink.prv"
+    let sinkPub = tmpDir </> "sink.pub"
+    void $ cli tr
+        [ "shelley", "address", "key-gen"
+        , "--signing-key-file", sinkPrv
+        , "--verification-key-file", sinkPub
+        ]
+    sink <- genSinkAddress tr tmpDir
+    (faucetInput, faucetPrv) <- takeFaucet
+    void $ cli tr
+        [ "shelley", "transaction", "build-raw"
+        , "--tx-in", faucetInput
+        , "--tx-out", sink <> "+" <> "1000000"
+        , "--ttl", "400"
+        , "--update-proposal-file", updatePath
+        , "--fee", show (faucetAmt - 1000000)
+        , "--out-file", txPath
+        ]
+    tx <- signTx tr tmpDir txPath [faucetPrv, source </> "bft-leader.skey"]
+    submitTx tr "allegra transition tx" tx
+updateVersion TmpByron tr tmpDir = do
     let updatePath = tmpDir </> "update-proposal"
     let votePath = tmpDir </> "update-vote"
     let network = "--mainnet"
