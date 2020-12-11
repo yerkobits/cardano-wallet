@@ -334,7 +334,7 @@ import Numeric.Natural
     ( Natural )
 import Prelude
 import System.Command
-    ( CmdResult, Stderr, Stdout (..), command )
+    ( CmdOption (..), CmdResult, Stderr, Stdout (..), command )
 import System.Directory
     ( doesPathExist )
 import System.Exit
@@ -345,6 +345,7 @@ import System.Process
     ( CreateProcess (..)
     , StdStream (..)
     , proc
+    , runProcess
     , waitForProcess
     , withCreateProcess
     )
@@ -1834,7 +1835,7 @@ cardanoWalletCLI
     :: forall r m. (CmdResult r, MonadIO m)
     => [String]
     -> m r
-cardanoWalletCLI = liftIO . command [] commandName
+cardanoWalletCLI = liftIO . command [EchoStderr False] commandName
 
 generateMnemonicsViaCLI
     :: forall r m. (CmdResult r, MonadIO m)
