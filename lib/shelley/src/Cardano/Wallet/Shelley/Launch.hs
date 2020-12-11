@@ -1908,7 +1908,7 @@ timeInterpreterFromTestingConfig genesisParams dir = do
             (Cardano.EpochNo 1)
 
     let byronParams = HF.defaultEraParams k (mkSlotLength 0.1)
-    let shelleyParams = HF.defaultEraParams k (mkSlotLength 0.2)
+    let shelleyParams = HF.defaultEraParams k (mkSlotLength 0.125)
 
     let summary = HF.summaryWithExactly $ exactlyTwo
              (HF.EraSummary HF.initBound (HF.EraEnd shelleyFork) byronParams)
