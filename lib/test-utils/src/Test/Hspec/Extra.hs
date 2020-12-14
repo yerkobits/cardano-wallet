@@ -42,6 +42,7 @@ import Test.Hspec
     , pendingWith
     , specify
     )
+import qualified Test.Hspec as Hspec
 
 -- | Run a 'bracket' resource acquisition function around all the specs. The
 -- bracket opens before the first test case and closes after the last test case.
@@ -115,9 +116,9 @@ aroundAll acquire =
 --
 -- It also has a timeout of 10 minutes.
 it :: HasCallStack => String -> ActionWith ctx -> SpecWith ctx
-it = itWithCustomTimeout (10*minute)
-  where
-    minute = 60
+it = Hspec.it --itWithCustomTimeout (10*minute)
+--  where
+--    minute = 60
 
 -- | Like @it@ but with a custom timeout, which makes it realistic to test.
 itWithCustomTimeout
