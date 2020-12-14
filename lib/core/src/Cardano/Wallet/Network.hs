@@ -464,6 +464,7 @@ follow nl tr cps yield header =
                     step delay0 hasRolledForward cursor'
                 (sl, _, _) -> do
                     traceWith tr $ MsgWillRollback sl
+                    putStrLn "ROLLBACK"
                     destroyCursor nl cursor' $> FollowRollback sl
             -- Some alternative solutions would be to:
             -- 1. Make sure we have a @BlockHeader@/@SlotNo@ for @Origin@

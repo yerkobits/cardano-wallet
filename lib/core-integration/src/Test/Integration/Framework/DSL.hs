@@ -584,11 +584,11 @@ minUTxOValue = 1_000_000
 
 -- | Parameter in test cluster genesis.
 slotLengthValue :: NominalDiffTime
-slotLengthValue = 0.2
+slotLengthValue = 0.333
 
 -- | Parameter in test cluster genesis.
 epochLengthValue :: Word32
-epochLengthValue = 50
+epochLengthValue = 30
 
 -- | Wallet server's chosen transaction TTL value (in seconds) when none is
 -- given.
