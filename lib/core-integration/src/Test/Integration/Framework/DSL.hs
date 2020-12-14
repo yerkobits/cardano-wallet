@@ -345,7 +345,6 @@ import System.Process
     ( CreateProcess (..)
     , StdStream (..)
     , proc
-    , runProcess
     , waitForProcess
     , withCreateProcess
     )

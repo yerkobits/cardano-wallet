@@ -36,7 +36,7 @@ import Cardano.Wallet.Primitive.AddressDerivation.Icarus
 import Cardano.Wallet.Primitive.Types.Address
     ( AddressState (..) )
 import Control.Monad
-    ( forM_ )
+    ( forM_, replicateM_ )
 import Control.Monad.Trans.Resource
     ( ResourceT, runResourceT )
 import Data.Generics.Internal.VL.Lens
@@ -113,7 +113,7 @@ spec = do
         scenario_ADDRESS_IMPORT_02 @n emptyIcarusWalletMws
         scenario_ADDRESS_IMPORT_03 @n emptyRandomWalletMws
         scenario_ADDRESS_IMPORT_04 @n fixtureRandomWallet
-        scenario_ADDRESS_IMPORT_05 @n 15000 emptyRandomWalletMws
+        replicateM_ 100 $ scenario_ADDRESS_IMPORT_05 @n 15000 emptyRandomWalletMws
         scenario_ADDRESS_IMPORT_06 @n emptyRandomWalletMws
 
 scenario_ADDRESS_LIST_01
