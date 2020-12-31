@@ -674,7 +674,7 @@ withBenchDBLayer
 withBenchDBLayer ti action =
     withSystemTempFile "bench.db" $ \dbFile _ -> do
         let before = newDBLayer nullTracer migrationDefaultValues (Just dbFile) ti
-        let after = destroyDBLayer . fst
+        let after = destroyDBLayer nullTracer . fst
         bracket before after $ \(_ctx, db) -> action db
   where
     migrationDefaultValues = Sqlite.DefaultFieldValues

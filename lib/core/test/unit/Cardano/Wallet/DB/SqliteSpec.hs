@@ -799,7 +799,7 @@ fileModeSpec =  do
             replicateM_ 25 $ do
                 db <- Just <$> temporaryDBFile
                 (ctx, _) <- newDBLayer' @(SeqState 'Mainnet ShelleyKey) db
-                destroyDBLayer ctx
+                destroyDBLayer nullTracer ctx
 
     describe "DBFactory" $ do
         let ti = dummyTimeInterpreter
@@ -879,7 +879,7 @@ fileModeSpec =  do
             (ctx, DBLayer{..}) <- newDBLayer' (Just f)
             atomically $ unsafeRunExceptT $
                 initializeWallet testPk testCp testMetadata mempty gp pp
-            destroyDBLayer ctx
+            destroyDBLayer nullTracer ctx
             testOpeningCleaning f listWallets' [testPk] []
 
         it "create and get meta works" $ \f -> do
@@ -889,7 +889,7 @@ fileModeSpec =  do
                    { passphraseInfo = Just $ WalletPassphraseInfo now EncryptWithPBKDF2 }
             atomically $ unsafeRunExceptT $
                 initializeWallet testPk testCp meta mempty gp pp
-            destroyDBLayer ctx
+            destroyDBLayer nullTracer ctx
             testOpeningCleaning f (`readWalletMeta'` testPk) (Just meta) Nothing
 
         it "create and get private key" $ \f-> do
@@ -897,7 +897,7 @@ fileModeSpec =  do
             atomically $ unsafeRunExceptT $
                 initializeWallet testPk testCp testMetadata mempty gp pp
             (k, h) <- unsafeRunExceptT $ attachPrivateKey db testPk
-            destroyDBLayer ctx
+            destroyDBLayer nullTracer ctx
             testOpeningCleaning f (`readPrivateKey'` testPk) (Just (k, h)) Nothing
 
         it "put and read tx history (Ascending)" $ \f -> do
@@ -906,7 +906,7 @@ fileModeSpec =  do
                 unsafeRunExceptT $
                     initializeWallet testPk testCp testMetadata mempty gp pp
                 unsafeRunExceptT $ putTxHistory testPk testTxs
-            destroyDBLayer ctx
+            destroyDBLayer nullTracer ctx
             testOpeningCleaning
                 f
                 (\db' -> readTxHistory' db' testPk Ascending wholeRange Nothing)
@@ -919,7 +919,7 @@ fileModeSpec =  do
                 unsafeRunExceptT $
                     initializeWallet testPk testCp testMetadata mempty gp pp
                 unsafeRunExceptT $ putTxHistory testPk testTxs
-            destroyDBLayer ctx
+            destroyDBLayer nullTracer ctx
             testOpeningCleaning
                 f
                 (\db' -> readTxHistory' db' testPk Descending wholeRange Nothing)
@@ -932,7 +932,7 @@ fileModeSpec =  do
                 unsafeRunExceptT $
                     initializeWallet testPk testCp testMetadata mempty gp pp
                 unsafeRunExceptT $ putCheckpoint testPk testCp
-            destroyDBLayer ctx
+            destroyDBLayer nullTracer ctx
             testOpeningCleaning f (`readCheckpoint'` testPk) (Just testCp) Nothing
 
         describe "Golden rollback scenarios" $ do
@@ -1029,9 +1029,9 @@ prop_randomOpChunks (KeyValPairs pairs) =
         cutRandomly pairs >>= mapM_ (\chunk -> do
             (ctx, db) <- newDBLayer' (Just filepath)
             forM_ chunk (insertPair db)
-            destroyDBLayer ctx)
+            destroyDBLayer nullTracer ctx)
         dbF `shouldBeConsistentWith` dbM
-        destroyDBLayer ctxF *> destroyDBLayer ctxM
+        destroyDBLayer nullTracer ctxF *> destroyDBLayer nullTracer ctxM
 
     insertPair
         :: DBLayer IO s k
@@ -1077,11 +1077,10 @@ testOpeningCleaning filepath call expectedAfterOpen expectedAfterClean = do
     call db1 `shouldReturn` expectedAfterOpen
     _ <- cleanDB db1
     call db1 `shouldReturn` expectedAfterClean
-    destroyDBLayer ctx1
+    destroyDBLayer nullTracer ctx1
     (ctx2,db2) <- newDBLayer' (Just filepath)
     call db2 `shouldReturn` expectedAfterClean
-    destroyDBLayer ctx2
-
+    destroyDBLayer nullTracer ctx2
 
 -- | Run a test action inside withDBLayer, then check assertions.
 withTestDBFile
