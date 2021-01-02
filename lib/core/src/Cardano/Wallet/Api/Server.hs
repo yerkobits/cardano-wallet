@@ -327,30 +327,25 @@ import Cardano.Wallet.Primitive.Types.Tx
     , txOutCoin
     )
 import Cardano.Wallet.Registry
-    ( HasWorkerCtx (..)
-    , MkWorker (..)
-    , WorkerLog (..)
-    , defaultWorkerAfter
-    , workerResource
-    )
+    ( HasWorkerCtx (..), MkWorker (..), WorkerLog (..), defaultWorkerAfter )
 import Cardano.Wallet.Transaction
     ( DelegationAction (..), TransactionLayer )
-import Cardano.Wallet.Unsafe
-    ( unsafeRunExceptT )
 import Control.Arrow
     ( second )
 import Control.DeepSeq
     ( NFData )
 import Control.Monad
     ( forM, forever, join, void, when, (>=>) )
-import Control.Monad.IO.Class
-    ( MonadIO, liftIO )
+import Control.Monad.IO.Unlift
+    ( MonadIO, MonadUnliftIO (..), liftIO )
+import Control.Monad.Trans.Class
+    ( lift )
 import Control.Monad.Trans.Except
     ( ExceptT (..), runExceptT, throwE, withExceptT )
 import Control.Monad.Trans.Maybe
     ( MaybeT (..), exceptToMaybeT )
 import Control.Tracer
-    ( Tracer )
+    ( Tracer, traceWith )
 import Data.Aeson
     ( (.=) )
 import Data.Bifunctor
@@ -359,6 +354,10 @@ import Data.ByteString
     ( ByteString )
 import Data.Coerce
     ( coerce )
+import Data.Either
+    ( lefts )
+import Data.Either.Combinators
+    ( whenLeft )
 import Data.Either.Extra
     ( eitherToMaybe )
 import Data.Function
@@ -447,6 +446,8 @@ import Type.Reflection
     ( Typeable )
 import UnliftIO.Async
     ( race_ )
+import UnliftIO.Compat
+    ( unliftIOWith )
 import UnliftIO.Concurrent
     ( threadDelay )
 import UnliftIO.Exception
@@ -1369,7 +1370,7 @@ postTransaction ctx genChange (ApiT wid) body = do
                 let (xprv, acct) = W.someRewardAccount @ShelleyKey mw
                 wdrl <- liftHandler (W.queryRewardBalance @_ wrk acct)
                     >>= liftIO . W.readNextWithdrawal @_ @s @k wrk wid
-                when (wdrl == Quantity 0) $ do
+                when (wdrl == Quantity 0) $
                     liftHandler $ throwE ErrWithdrawalNotWorth
                 pure (wdrl, const (xprv, mempty))
 
@@ -1867,7 +1868,8 @@ derivePublicKey ctx (ApiT wid) (ApiT role_) (ApiT ix) = do
                                   Helpers
 -------------------------------------------------------------------------------}
 
--- | see 'Cardano.Wallet#createWallet'
+-- | Starts a worker thread for restoring a wallet. This is called when a new
+-- wallet is created. See 'Cardano.Wallet#createWallet'
 initWorker
     :: forall ctx s k.
         ( HasWorkerRegistry s k ctx
@@ -1886,30 +1888,27 @@ initWorker
         -- ^ Action to run concurrently with restore action
     -> ExceptT ErrCreateWallet IO WalletId
 initWorker ctx wid createWallet restoreWallet coworker =
-    liftIO (Registry.lookup re wid) >>= \case
+    lift (Registry.lookup re wid) >>= \case
         Just _ ->
             throwE $ ErrCreateWalletAlreadyExists $ ErrWalletAlreadyExists wid
-        Nothing ->
-            liftIO (Registry.register @_ @ctx re ctx wid config) >>= \case
-                Nothing ->
-                    throwE ErrCreateWalletFailedToCreateWorker
-                Just _ ->
-                    pure wid
+        Nothing -> do
+            void $ Registry.register @_ @_ @ctx re ctx wid config
+            pure wid
   where
     config = MkWorker
-        { workerBefore = \ctx' _ -> do
-            void $ unsafeRunExceptT $ createWallet ctx'
+        { workerBefore = \ctx' _ ->
+            withExceptT ErrCreateWalletAlreadyExists $ void $ createWallet ctx'
 
-        , workerMain = \ctx' _ -> do
-            race_
-                (unsafeRunExceptT $ restoreWallet ctx')
-                (coworker ctx')
+        , workerMain = \ctx' _ ->
+            withExceptT ErrCreateWalletFailedToCreateWorker $ race_
+                (restoreWallet ctx')
+                (lift $ coworker ctx')
 
         , workerAfter =
             defaultWorkerAfter
 
         , workerAcquire =
-            withDatabase df wid
+            unliftIOWith $ withDatabase df wid
         }
     re = ctx ^. workerRegistry @s @k
     df = ctx ^. dbFactory @s @k
@@ -2197,10 +2196,16 @@ newApiLayer
 newApiLayer tr g0 nw tl df coworker = do
     re <- Registry.empty
     let ctx = ApiLayer tr g0 nw tl df re
-    listDatabases df >>= mapM_ (registerWorker ctx coworker)
+    workers <- listDatabases df >>= mapM (\wid -> do
+        res <- runExceptT $ registerWorker ctx coworker wid
+        whenLeft res $
+            traceWith tr . MsgFromWorker wid . W.MsgIntegrityCheckFailed
+        pure res)
+    mapM_ throwIO (lefts workers)
     return ctx
 
 -- | Register a restoration worker to the registry.
+-- This is called at startup for each wallet.
 registerWorker
     :: forall ctx s k.
         ( ctx ~ ApiLayer s k
@@ -2210,30 +2215,27 @@ registerWorker
     => ApiLayer s k
     -> (WorkerCtx ctx -> WalletId -> IO ())
     -> WalletId
-    -> IO ()
+    -> ExceptT W.ErrCheckWalletIntegrity IO ()
 registerWorker ctx coworker wid =
-    void $ Registry.register @_ @ctx re ctx wid config
+    void $ Registry.register @_ @_ @ctx re ctx wid config
   where
     (_, NetworkParameters gp _ _, _) = ctx ^. genesisData
     re = ctx ^. workerRegistry
     df = ctx ^. dbFactory
     config = MkWorker
         { workerBefore = \ctx' _ ->
-            runExceptT (W.checkWalletIntegrity ctx' wid gp)
-                >>= either throwIO pure
+            W.checkWalletIntegrity ctx' wid gp
 
         , workerMain = \ctx' _ -> do
-            -- FIXME:
-            -- Review error handling here
-            race_
-                (unsafeRunExceptT $ W.restoreWallet @(WorkerCtx ctx) @s ctx' wid)
-                (coworker ctx' wid)
+            withExceptT W.ErrCheckWalletIntegrityNoSuchWallet $ race_
+                (W.restoreWallet @(WorkerCtx ctx) @s ctx' wid)
+                (lift $ coworker ctx' wid)
 
         , workerAfter =
             defaultWorkerAfter
 
         , workerAcquire =
-            withDatabase df wid
+            unliftIOWith $ withDatabase df wid
         }
 
 -- | Run an action in a particular worker context. Fails if there's no worker
@@ -2242,7 +2244,7 @@ withWorkerCtx
     :: forall ctx s k m a.
         ( HasWorkerRegistry s k ctx
         , HasDBFactory s k ctx
-        , MonadIO m
+        , MonadUnliftIO m
         )
     => ctx
         -- ^ A context that has a registry
@@ -2256,15 +2258,15 @@ withWorkerCtx
         -- ^ Do something with the wallet
     -> m a
 withWorkerCtx ctx wid onMissing onNotResponding action =
-    Registry.lookup re wid >>= \case
+    Registry.lookupResource re wid >>= \case
         Nothing -> do
             wids <- liftIO $ listDatabases df
             if wid `elem` wids then
                 onNotResponding (ErrWalletNotResponding wid)
             else
                 onMissing (ErrNoSuchWallet wid)
-        Just wrk ->
-            action $ hoistResource (workerResource wrk) (MsgFromWorker wid) ctx
+        Just resource ->
+            action $ hoistResource resource (MsgFromWorker wid) ctx
   where
     re = ctx ^. workerRegistry @s @k
     df = ctx ^. dbFactory @s @k
@@ -2277,7 +2279,7 @@ withWorkerCtx ctx wid onMissing onNotResponding action =
 -- corresponding servant error.
 class LiftHandler e where
     liftHandler :: ExceptT e IO a -> Handler a
-    liftHandler action = Handler (withExceptT handler action)
+    liftHandler = Handler . withExceptT handler
 
     liftE :: e -> Handler a
     liftE = liftHandler . throwE
@@ -2298,7 +2300,7 @@ data ErrUnexpectedPoolIdPlaceholder = ErrUnexpectedPoolIdPlaceholder
 data ErrCreateWallet
     = ErrCreateWalletAlreadyExists ErrWalletAlreadyExists
         -- ^ Wallet already exists
-    | ErrCreateWalletFailedToCreateWorker
+    | ErrCreateWalletFailedToCreateWorker ErrNoSuchWallet
         -- ^ Somehow, we couldn't create a worker or open a db connection
     deriving (Eq, Show)
 
@@ -2366,7 +2368,7 @@ instance LiftHandler ErrWalletAlreadyExists where
 instance LiftHandler ErrCreateWallet where
     handler = \case
         ErrCreateWalletAlreadyExists e -> handler e
-        ErrCreateWalletFailedToCreateWorker ->
+        ErrCreateWalletFailedToCreateWorker _ ->
             apiError err500 UnexpectedError $ mconcat
                 [ "That's embarrassing. Your wallet looks good, but I couldn't "
                 , "open a new database to store its data. This is unexpected "

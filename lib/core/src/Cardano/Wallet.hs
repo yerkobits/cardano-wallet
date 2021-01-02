@@ -2684,6 +2684,7 @@ data WalletLog
     | MsgRewardBalanceResult (Either ErrFetchRewards (Quantity "lovelace" Word64))
     | MsgRewardBalanceNoSuchWallet ErrNoSuchWallet
     | MsgRewardBalanceExited
+    | MsgIntegrityCheckFailed ErrCheckWalletIntegrity
     deriving (Show, Eq)
 
 instance ToText WalletLog where
@@ -2756,6 +2757,9 @@ instance ToText WalletLog where
             T.pack (show err)
         MsgRewardBalanceExited ->
             "Reward balance worker has exited."
+        MsgIntegrityCheckFailed err ->
+            "Integrity check failed when loading wallet: " <>
+            T.pack (show err)
 
 instance HasPrivacyAnnotation WalletLog
 instance HasSeverityAnnotation WalletLog where
@@ -2784,3 +2788,4 @@ instance HasSeverityAnnotation WalletLog where
         MsgRewardBalanceResult (Left _) -> Notice
         MsgRewardBalanceNoSuchWallet{} -> Warning
         MsgRewardBalanceExited -> Notice
+        MsgIntegrityCheckFailed _ -> Error
