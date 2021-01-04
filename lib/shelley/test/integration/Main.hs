@@ -120,7 +120,7 @@ import Test.Utils.Paths
 import UnliftIO.Async
     ( race )
 import UnliftIO.Exception
-    ( SomeException, throwIO, withException )
+    ( SomeException, isAsyncException, throwIO, withException )
 import UnliftIO.MVar
     ( newEmptyMVar, putMVar, takeMVar )
 
@@ -361,7 +361,9 @@ instance ToText TestsLog where
                     , T.unwords (T.pack . show <$> ps)
                     ]
             ]
-        MsgServerError e -> T.pack (show e)
+        MsgServerError e
+            | isAsyncException e -> "Server thread cancelled"
+            | otherwise -> T.pack (show e)
 
 instance HasPrivacyAnnotation TestsLog
 instance HasSeverityAnnotation TestsLog where
@@ -371,7 +373,9 @@ instance HasSeverityAnnotation TestsLog where
         MsgBaseUrl {} -> Notice
         MsgCluster msg -> getSeverityAnnotation msg
         MsgPoolGarbageCollectionEvent _ -> Info
-        MsgServerError{} -> Critical
+        MsgServerError e
+            | isAsyncException e -> Info
+            | otherwise -> Critical
 
 withTracers
     :: FilePath
