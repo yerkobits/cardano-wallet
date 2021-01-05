@@ -335,7 +335,7 @@ import Control.Arrow
 import Control.DeepSeq
     ( NFData )
 import Control.Monad
-    ( forM, forever, join, void, when, (>=>) )
+    ( forM, forM_, forever, join, void, when, (>=>) )
 import Control.Monad.IO.Unlift
     ( MonadIO, MonadUnliftIO (..), liftIO )
 import Control.Monad.Trans.Class
@@ -354,8 +354,6 @@ import Data.ByteString
     ( ByteString )
 import Data.Coerce
     ( coerce )
-import Data.Either
-    ( lefts )
 import Data.Either.Combinators
     ( whenLeft )
 import Data.Either.Extra
@@ -451,7 +449,7 @@ import UnliftIO.Compat
 import UnliftIO.Concurrent
     ( threadDelay )
 import UnliftIO.Exception
-    ( IOException, bracket, throwIO, tryAnyDeep, tryJust )
+    ( IOException, bracket, tryAnyDeep, tryJust )
 
 import qualified Cardano.Wallet as W
 import qualified Cardano.Wallet.Api.Types as Api
@@ -2196,12 +2194,13 @@ newApiLayer
 newApiLayer tr g0 nw tl df coworker = do
     re <- Registry.empty
     let ctx = ApiLayer tr g0 nw tl df re
-    workers <- listDatabases df >>= mapM (\wid -> do
+    wallets <- listDatabases df
+    forM_ wallets $ \wid -> do
         res <- runExceptT $ registerWorker ctx coworker wid
+        -- Workers which failed to start are logged, but the server will
+        -- continue regardless. API requests which use these wallets will fail.
         whenLeft res $
             traceWith tr . MsgFromWorker wid . W.MsgIntegrityCheckFailed
-        pure res)
-    mapM_ throwIO (lefts workers)
     return ctx
 
 -- | Register a restoration worker to the registry.
