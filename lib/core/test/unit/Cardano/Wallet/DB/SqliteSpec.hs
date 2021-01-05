@@ -46,7 +46,7 @@ import Cardano.BM.Trace
 import Cardano.Crypto.Wallet
     ( XPrv )
 import Cardano.DB.Sqlite
-    ( DBLog (..), SqliteContext, destroyDBLayer, fieldName )
+    ( DBLog (..), fieldName, newInMemorySqliteContext )
 import Cardano.Mnemonic
     ( SomeMnemonic (..) )
 import Cardano.Wallet.DB
@@ -172,10 +172,6 @@ import Data.ByteString
     ( ByteString )
 import Data.Coerce
     ( coerce )
-import Data.Function
-    ( (&) )
-import Data.Functor
-    ( ($>) )
 import Data.Generics.Internal.VL.Lens
     ( (^.) )
 import Data.Generics.Labels
@@ -454,7 +450,7 @@ testMigrationTxMetaFee dbName expectedLength caseByCase = do
         copyFile orig path
         (logs, result) <- captureLogging $ \tr -> do
             withDBLayer @s @k tr defaultFieldValues (Just path) ti
-                $ \(_ctx, db) -> db & \DBLayer{..} -> atomically
+                $ \DBLayer{..} -> atomically
                 $ do
                     [wid] <- listWallets
                     readTxHistory wid Nothing Descending wholeRange Nothing
@@ -510,7 +506,7 @@ testMigrationCleanupCheckpoints dbName genesisParameters tip = do
         copyFile orig path
         (logs, result) <- captureLogging $ \tr -> do
             withDBLayer @s @k tr defaultFieldValues (Just path) ti
-                $ \(_ctx, db) -> db & \DBLayer{..} -> atomically
+                $ \DBLayer{..} -> atomically
                 $ do
                     [wid] <- listWallets
                     (,) <$> readGenesisParameters wid <*> readCheckpoint wid
@@ -549,7 +545,7 @@ testMigrationRole dbName = do
         copyFile orig path
         (logs, Just cp) <- captureLogging $ \tr -> do
             withDBLayer @s @k tr defaultFieldValues (Just path) ti
-                $ \(_ctx, db) -> db & \DBLayer{..} -> atomically
+                $ \DBLayer{..} -> atomically
                 $ do
                     [wid] <- listWallets
                     readCheckpoint wid
@@ -587,7 +583,7 @@ testMigrationSeqStateDerivationPrefix dbName prefix = do
         copyFile orig path
         (logs, Just cp) <- captureLogging $ \tr -> do
             withDBLayer @s @k tr defaultFieldValues (Just path) ti
-                $ \(_ctx, db) -> db & \DBLayer{..} -> atomically
+                $ \DBLayer{..} -> atomically
                 $ do
                     [wid] <- listWallets
                     readCheckpoint wid
@@ -614,7 +610,7 @@ testMigrationPassphraseScheme = do
         copyFile orig path
         (logs, (a,b,c,d)) <- captureLogging $ \tr -> do
             withDBLayer @s @k tr defaultFieldValues (Just path) ti
-                $ \(_ctx, db) -> db & \DBLayer{..} -> atomically
+                $ \DBLayer{..} -> atomically
                 $ do
                     Just a <- readWalletMeta $ PrimaryKey walNeedMigration
                     Just b <- readWalletMeta $ PrimaryKey walNewScheme
@@ -686,7 +682,7 @@ testMigrationUpdateFeeValue dbName expectedFeePolicy expectedKeyDeposit = do
         copyFile orig path
         (logs, pp') <- captureLogging $ \tr -> do
             withDBLayer @s @k tr defaultFieldValues (Just path) ti
-                $ \(_ctx, db) -> db & \DBLayer{..} -> atomically
+                $ \DBLayer{..} -> atomically
                 $ do
                     [wid] <- listWallets
                     readProtocolParameters wid
@@ -739,18 +735,18 @@ newMemoryDBLayer
         , WalletKey k
         )
     => IO (DBLayer IO s k)
-newMemoryDBLayer = snd . snd <$> newMemoryDBLayer'
+newMemoryDBLayer = snd <$> newMemoryDBLayer'
 
 newMemoryDBLayer'
     ::  ( PersistState s
         , PersistPrivateKey (k 'RootK)
         , WalletKey k
         )
-    => IO (TVar [DBLog], (SqliteContext, DBLayer IO s k))
+    => IO (TVar [DBLog], DBLayer IO s k)
 newMemoryDBLayer' = do
     logVar <- newTVarIO []
-    (logVar, ) <$>
-        newDBLayer (traceInTVarIO logVar) defaultFieldValues Nothing ti
+    ctx <- newInMemorySqliteContext (traceInTVarIO logVar) [] DB.migrateAll
+    (logVar,) <$> newDBLayer ti ctx
   where
    ti = dummyTimeInterpreter
 
@@ -763,7 +759,7 @@ withLoggingDB
     -> Spec
 withLoggingDB = beforeAll newMemoryDBLayer' . beforeWith clean
   where
-    clean (logs, (_, db)) = do
+    clean (logs, db) = do
         cleanDB db
         STM.atomically $ writeTVar logs []
         pure (readTVarIO logs, db)
@@ -798,8 +794,7 @@ fileModeSpec =  do
         it "Opening and closing of db works" $ do
             replicateM_ 25 $ do
                 db <- Just <$> temporaryDBFile
-                (ctx, _) <- newDBLayer' @(SeqState 'Mainnet ShelleyKey) db
-                destroyDBLayer nullTracer ctx
+                withTestDBLayer @(SeqState 'Mainnet ShelleyKey) db $ \_ -> pure ()
 
     describe "DBFactory" $ do
         let ti = dummyTimeInterpreter
@@ -876,37 +871,33 @@ fileModeSpec =  do
         describe "Check db reading/writing from/to file and cleaning" $ do
 
         it "create and list wallet works" $ \f -> do
-            (ctx, DBLayer{..}) <- newDBLayer' (Just f)
-            atomically $ unsafeRunExceptT $
-                initializeWallet testPk testCp testMetadata mempty gp pp
-            destroyDBLayer nullTracer ctx
+            withTestDBLayer (Just f) $ \DBLayer{..} -> do
+                atomically $ unsafeRunExceptT $
+                    initializeWallet testPk testCp testMetadata mempty gp pp
             testOpeningCleaning f listWallets' [testPk] []
 
         it "create and get meta works" $ \f -> do
-            (ctx, DBLayer{..}) <- newDBLayer' (Just f)
             now <- getCurrentTime
             let meta = testMetadata
                    { passphraseInfo = Just $ WalletPassphraseInfo now EncryptWithPBKDF2 }
-            atomically $ unsafeRunExceptT $
-                initializeWallet testPk testCp meta mempty gp pp
-            destroyDBLayer nullTracer ctx
+            withTestDBLayer (Just f) $ \DBLayer{..} -> do
+                atomically $ unsafeRunExceptT $
+                    initializeWallet testPk testCp meta mempty gp pp
             testOpeningCleaning f (`readWalletMeta'` testPk) (Just meta) Nothing
 
-        it "create and get private key" $ \f-> do
-            (ctx, db@DBLayer{..}) <- newDBLayer' (Just f)
-            atomically $ unsafeRunExceptT $
-                initializeWallet testPk testCp testMetadata mempty gp pp
-            (k, h) <- unsafeRunExceptT $ attachPrivateKey db testPk
-            destroyDBLayer nullTracer ctx
+        it "create and get private key" $ \f -> do
+            (k, h) <- withTestDBLayer (Just f) $ \db@DBLayer{..} -> do
+                atomically $ unsafeRunExceptT $
+                    initializeWallet testPk testCp testMetadata mempty gp pp
+                unsafeRunExceptT $ attachPrivateKey db testPk
             testOpeningCleaning f (`readPrivateKey'` testPk) (Just (k, h)) Nothing
 
         it "put and read tx history (Ascending)" $ \f -> do
-            (ctx, DBLayer{..}) <- newDBLayer' (Just f)
-            atomically $ do
-                unsafeRunExceptT $
-                    initializeWallet testPk testCp testMetadata mempty gp pp
-                unsafeRunExceptT $ putTxHistory testPk testTxs
-            destroyDBLayer nullTracer ctx
+            withTestDBLayer (Just f) $ \DBLayer{..} -> do
+                atomically $ do
+                    unsafeRunExceptT $
+                        initializeWallet testPk testCp testMetadata mempty gp pp
+                    unsafeRunExceptT $ putTxHistory testPk testTxs
             testOpeningCleaning
                 f
                 (\db' -> readTxHistory' db' testPk Ascending wholeRange Nothing)
@@ -914,12 +905,11 @@ fileModeSpec =  do
                 mempty
 
         it "put and read tx history (Decending)" $ \f -> do
-            (ctx, DBLayer{..}) <- newDBLayer' (Just f)
-            atomically $ do
-                unsafeRunExceptT $
-                    initializeWallet testPk testCp testMetadata mempty gp pp
-                unsafeRunExceptT $ putTxHistory testPk testTxs
-            destroyDBLayer nullTracer ctx
+            withTestDBLayer (Just f) $ \DBLayer{..} -> do
+                atomically $ do
+                    unsafeRunExceptT $
+                        initializeWallet testPk testCp testMetadata mempty gp pp
+                    unsafeRunExceptT $ putTxHistory testPk testTxs
             testOpeningCleaning
                 f
                 (\db' -> readTxHistory' db' testPk Descending wholeRange Nothing)
@@ -927,12 +917,11 @@ fileModeSpec =  do
                 mempty
 
         it "put and read checkpoint" $ \f -> do
-            (ctx, DBLayer{..}) <- newDBLayer' (Just f)
-            atomically $ do
-                unsafeRunExceptT $
-                    initializeWallet testPk testCp testMetadata mempty gp pp
-                unsafeRunExceptT $ putCheckpoint testPk testCp
-            destroyDBLayer nullTracer ctx
+            withTestDBLayer (Just f) $ \DBLayer{..} -> do
+                atomically $ do
+                    unsafeRunExceptT $
+                        initializeWallet testPk testCp testMetadata mempty gp pp
+                    unsafeRunExceptT $ putCheckpoint testPk testCp
             testOpeningCleaning f (`readCheckpoint'` testPk) (Just testCp) Nothing
 
         describe "Golden rollback scenarios" $ do
@@ -941,7 +930,7 @@ fileModeSpec =  do
 
             it "(Regression test #1575) - TxMetas and checkpoints should \
                \rollback to the same place" $ \f -> do
-                (_ctx, db@DBLayer{..}) <- newDBLayer' (Just f)
+              withTestDBLayer (Just f) $ \db@DBLayer{..} -> do
 
                 let ourAddrs = knownAddresses (getState testCp)
 
@@ -1023,15 +1012,12 @@ prop_randomOpChunks (KeyValPairs pairs) =
   where
     prop = do
         filepath <- temporaryDBFile
-        (ctxF, dbF) <- newDBLayer' (Just filepath) >>= cleanDB'
-        (ctxM, dbM) <- inMemoryDBLayer >>= cleanDB'
-        forM_ pairs (insertPair dbM)
-        cutRandomly pairs >>= mapM_ (\chunk -> do
-            (ctx, db) <- newDBLayer' (Just filepath)
-            forM_ chunk (insertPair db)
-            destroyDBLayer nullTracer ctx)
-        dbF `shouldBeConsistentWith` dbM
-        destroyDBLayer nullTracer ctxF *> destroyDBLayer nullTracer ctxM
+        withTestDBLayer (Just filepath) $ \dbF -> do
+            cleanDB dbF
+            withTestDBLayer Nothing $ \dbM -> do
+                forM_ pairs (insertPair dbM)
+                cutRandomly pairs >>= mapM_ (mapM (insertPair dbF))
+                dbF `shouldBeConsistentWith` dbM
 
     insertPair
         :: DBLayer IO s k
@@ -1073,14 +1059,12 @@ testOpeningCleaning
     -> s
     -> Expectation
 testOpeningCleaning filepath call expectedAfterOpen expectedAfterClean = do
-    (ctx1, db1) <- newDBLayer' (Just filepath)
-    call db1 `shouldReturn` expectedAfterOpen
-    _ <- cleanDB db1
-    call db1 `shouldReturn` expectedAfterClean
-    destroyDBLayer nullTracer ctx1
-    (ctx2,db2) <- newDBLayer' (Just filepath)
-    call db2 `shouldReturn` expectedAfterClean
-    destroyDBLayer nullTracer ctx2
+    withTestDBLayer (Just filepath) $ \db -> do
+        call db `shouldReturn` expectedAfterOpen
+        _ <- cleanDB db
+        call db `shouldReturn` expectedAfterClean
+    withTestDBLayer (Just filepath) $ \db -> do
+        call db `shouldReturn` expectedAfterClean
 
 -- | Run a test action inside withDBLayer, then check assertions.
 withTestDBFile
@@ -1098,15 +1082,10 @@ withTestDBFile action expectations = do
             defaultFieldValues
             (Just fp)
             ti
-            (action . snd)
+            action
         expectations fp
   where
     ti = dummyTimeInterpreter
-
-inMemoryDBLayer
-    :: PersistState s
-    => IO (SqliteContext, DBLayer IO s ShelleyKey)
-inMemoryDBLayer = newDBLayer' Nothing
 
 temporaryDBFile :: IO FilePath
 temporaryDBFile = emptySystemTempFile "cardano-wallet-SqliteFileMode"
@@ -1120,21 +1099,16 @@ defaultFieldValues = DefaultFieldValues
     , defaultKeyDeposit = Coin 2_000_000
     }
 
-newDBLayer'
+withTestDBLayer
     :: PersistState s
     => Maybe FilePath
-    -> IO (SqliteContext, DBLayer IO s ShelleyKey)
-newDBLayer' fp = newDBLayer nullTracer defaultFieldValues fp ti
-  where
-    ti = dummyTimeInterpreter
-
--- | Clean the database
-cleanDB'
-    :: Monad m
-    => (SqliteContext, DBLayer m s k)
-    -> m (SqliteContext, DBLayer m s k)
-cleanDB' (ctx, db) =
-    cleanDB db $> (ctx, db)
+    -> (DBLayer IO s ShelleyKey -> IO a)
+    -> IO a
+withTestDBLayer fp = withDBLayer
+    nullTracer
+    defaultFieldValues
+    fp
+    dummyTimeInterpreter
 
 listWallets'
     :: DBLayer m s k

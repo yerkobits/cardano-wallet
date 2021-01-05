@@ -16,7 +16,7 @@ import Prelude
 import Cardano.BM.Trace
     ( traceInTVarIO )
 import Cardano.DB.Sqlite
-    ( DBLog (..), SqliteContext )
+    ( DBLog (..), newInMemorySqliteContext )
 import Cardano.Pool.DB
     ( DBLayer (..) )
 import Cardano.Pool.DB.Log
@@ -24,9 +24,13 @@ import Cardano.Pool.DB.Log
 import Cardano.Pool.DB.Properties
     ( properties )
 import Cardano.Pool.DB.Sqlite
-    ( newDBLayer, withDBLayer )
+    ( createViews, newDBLayer, withDBLayer )
+import Cardano.Pool.DB.Sqlite.TH
+    ( migrateAll )
 import Cardano.Wallet.DummyTarget.Primitive.Types
     ( dummyTimeInterpreter )
+import Control.Tracer
+    ( contramap )
 import System.Directory
     ( copyFile )
 import System.FilePath
@@ -45,12 +49,15 @@ import UnliftIO.Temporary
 -- | Set up a DBLayer for testing, with the command context, and the logging
 -- variable.
 newMemoryDBLayer :: IO (DBLayer IO)
-newMemoryDBLayer = snd . snd <$> newMemoryDBLayer'
+newMemoryDBLayer = snd <$> newMemoryDBLayer'
 
-newMemoryDBLayer' :: IO (TVar [PoolDbLog], (SqliteContext, DBLayer IO))
+newMemoryDBLayer' :: IO (TVar [PoolDbLog], DBLayer IO)
 newMemoryDBLayer' = do
     logVar <- newTVarIO []
-    (logVar, ) <$> newDBLayer (traceInTVarIO logVar) Nothing ti
+    let tr  = traceInTVarIO logVar
+    let tr' = contramap MsgGeneric tr
+    ctx <- newInMemorySqliteContext tr' createViews migrateAll
+    return (logVar, newDBLayer tr ti ctx)
   where
     ti = dummyTimeInterpreter
 
@@ -75,7 +82,7 @@ test_migrationFromv20191216 =
                 withDBLayer tr (Just path) ti $ \_ -> pure ()
                 withDBLayer tr (Just path) ti $ \_ -> pure ()
 
-            let databaseConnMsg  = filter isMsgConnStr logs
+            let databaseConnMsg  = filter isMsgWillOpenDB logs
             let databaseResetMsg = filter (== MsgGeneric MsgDatabaseReset) logs
             let migrationErrMsg  = filter isMsgMigrationError logs
 
@@ -83,9 +90,9 @@ test_migrationFromv20191216 =
             length databaseResetMsg `shouldBe` 1
             length migrationErrMsg  `shouldBe` 1
 
-isMsgConnStr :: PoolDbLog -> Bool
-isMsgConnStr (MsgGeneric (MsgConnStr _)) = True
-isMsgConnStr _ = False
+isMsgWillOpenDB :: PoolDbLog -> Bool
+isMsgWillOpenDB (MsgGeneric (MsgWillOpenDB _)) = True
+isMsgWillOpenDB _ = False
 
 isMsgMigrationError :: PoolDbLog -> Bool
 isMsgMigrationError (MsgGeneric (MsgMigrations (Left _))) = True

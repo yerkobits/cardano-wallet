@@ -4,6 +4,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TupleSections #-}
@@ -49,11 +50,17 @@ import Cardano.BM.Data.Severity
 import Cardano.BM.Data.Trace
     ( Trace )
 import Cardano.BM.Data.Tracer
-    ( Tracer, filterSeverity, nullTracer )
+    ( Tracer, filterSeverity )
 import Cardano.BM.Setup
     ( setupTrace_, shutdown )
 import Cardano.DB.Sqlite
-    ( DBLog, SqliteContext, destroyDBLayer )
+    ( ConnectionPool
+    , DBLog
+    , SqliteContext (..)
+    , destroyConnectionPool
+    , newConnectionPool
+    , newSqliteContext
+    )
 import Cardano.Mnemonic
     ( EntropySize, SomeMnemonic (..), entropyToMnemonic, genEntropy )
 import Cardano.Startup
@@ -61,7 +68,9 @@ import Cardano.Startup
 import Cardano.Wallet.DB
     ( DBLayer (..), PrimaryKey (..), cleanDB )
 import Cardano.Wallet.DB.Sqlite
-    ( DefaultFieldValues (..), PersistState, newDBLayer )
+    ( PersistState, newDBLayer )
+import Cardano.Wallet.DB.Sqlite.TH
+    ( migrateAll )
 import Cardano.Wallet.DummyTarget.Primitive.Types
     ( block0, dummyGenesisParameters, dummyProtocolParameters, mkTxId )
 import Cardano.Wallet.Logging
@@ -99,7 +108,7 @@ import Cardano.Wallet.Primitive.AddressDiscovery.Sequential
 import Cardano.Wallet.Primitive.Model
     ( Wallet, initWallet, unsafeInitWallet )
 import Cardano.Wallet.Primitive.Slotting
-    ( hoistTimeInterpreter, mkSingleEraInterpreter )
+    ( TimeInterpreter, hoistTimeInterpreter, mkSingleEraInterpreter )
 import Cardano.Wallet.Primitive.Types
     ( ActiveSlotCoefficient (..)
     , Block (..)
@@ -183,8 +192,6 @@ import Data.Typeable
     ( Typeable )
 import Data.Word
     ( Word64 )
-import Database.Sqlite
-    ( SqliteException (..) )
 import Fmt
     ( build, padLeftF, padRightF, pretty, (+|), (|+) )
 import System.Directory
@@ -198,7 +205,7 @@ import System.IO.Unsafe
 import System.Random
     ( mkStdGen, randoms )
 import UnliftIO.Exception
-    ( bracket, handle )
+    ( bracket, throwIO )
 
 import qualified Cardano.BM.Configuration.Model as CM
 import qualified Cardano.BM.Data.BackendKind as CM
@@ -674,13 +681,17 @@ setupDB
         , WalletKey k
         )
     => Tracer IO DBLog
-    -> IO (FilePath, SqliteContext, DBLayer IO s k)
+    -> IO (ConnectionPool, SqliteContext, DBLayer IO s k)
 setupDB tr = do
     f <- emptySystemTempFile "bench.db"
-    (ctx, db) <- newDBLayer tr defaultFieldValues (Just f) ti
-    pure (f, ctx, db)
-  where
-    ti = hoistTimeInterpreter (pure . runIdentity) $ mkSingleEraInterpreter
+    pool <- newConnectionPool tr f
+    ctx  <- either throwIO pure =<< newSqliteContext tr pool [] migrateAll f
+    db   <- newDBLayer singleEraInterpreter ctx
+    pure (pool, ctx, db)
+
+singleEraInterpreter :: TimeInterpreter IO
+singleEraInterpreter = hoistTimeInterpreter (pure . runIdentity) $
+    mkSingleEraInterpreter
         (StartTime $ posixSecondsToUTCTime 0)
         (SlottingParameters
         { getSlotLength = SlotLength 1
@@ -689,20 +700,11 @@ setupDB tr = do
         , getSecurityParameter = Quantity 2160
         })
 
-defaultFieldValues :: DefaultFieldValues
-defaultFieldValues = DefaultFieldValues
-    { defaultActiveSlotCoefficient = ActiveSlotCoefficient 1.0
-    , defaultDesiredNumberOfPool = 50
-    , defaultMinimumUTxOValue = Coin 0
-    , defaultHardforkEpoch = Nothing
-        -- NOTE value in the genesis when at the time this migration was needed.
-    , defaultKeyDeposit = Coin 0
-    }
-
-cleanupDB :: (FilePath, SqliteContext, DBLayer IO s k) -> IO ()
-cleanupDB (db, ctx, _) = do
-    handle (\SqliteException{} -> pure ()) $ destroyDBLayer nullTracer ctx
-    mapM_ remove [db, db <> "-shm", db <> "-wal"]
+cleanupDB :: (ConnectionPool, SqliteContext, DBLayer IO s k) -> IO ()
+cleanupDB (pool, SqliteContext{dbFile}, _) = do
+    destroyConnectionPool pool
+    let f = fromMaybe ":memory:" dbFile
+    mapM_ remove [f, f <> "-shm", f <> "-wal"]
   where
     remove f = doesFileExist f >>= \case
         True -> removeFile f
@@ -792,12 +794,14 @@ txHistoryDiskSpaceTests tr = do
         benchPutTxHistory mkOutputsCoin n i o [1..100] db
 
 benchDiskSize :: Tracer IO DBLog -> (DBLayerBench -> IO ()) -> IO ()
-benchDiskSize tr action = bracket (setupDB tr) cleanupDB $ \(f, ctx, db) -> do
-    action db
-    mapM_ (printFileSize "") [f, f <> "-shm", f <> "-wal"]
-    destroyDBLayer nullTracer ctx
-    printFileSize " (closed)" f
-    putStrLn ""
+benchDiskSize tr action = bracket (setupDB tr) cleanupDB
+    $ \(pool, SqliteContext{dbFile}, db) -> do
+        let f = fromMaybe ":memory:" dbFile
+        action db
+        mapM_ (printFileSize "") [f, f <> "-shm", f <> "-wal"]
+        destroyConnectionPool pool
+        printFileSize " (closed)" f
+        putStrLn ""
   where
     printFileSize sfx f = do
         size <- doesFileExist f >>= \case
@@ -829,6 +833,9 @@ instance NFData (DBLayer m s k) where
     rnf _ = ()
 
 instance NFData SqliteContext where
+    rnf _ = ()
+
+instance NFData ConnectionPool where
     rnf _ = ()
 
 testCp :: WalletBench
