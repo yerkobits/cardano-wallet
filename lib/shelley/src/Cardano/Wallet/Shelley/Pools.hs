@@ -116,7 +116,7 @@ import Cardano.Wallet.Unsafe
 import Control.Exception.Base
     ( AsyncException (..), asyncExceptionFromException )
 import Control.Monad
-    ( forM, forM_, forever, void, when )
+    ( forM, forM_, forever, join, void, when )
 import Control.Monad.IO.Class
     ( liftIO )
 import Control.Monad.Trans.Except
@@ -135,6 +135,8 @@ import Data.Generics.Internal.VL.Lens
     ( view )
 import Data.List.NonEmpty
     ( NonEmpty (..) )
+import Data.List.Split
+    ( chunksOf )
 import Data.Map
     ( Map )
 import Data.Map.Merge.Strict
@@ -165,6 +167,8 @@ import Ouroboros.Consensus.Cardano.Block
     ( CardanoBlock, HardForkBlock (..) )
 import System.Random
     ( RandomGen, random )
+import UnliftIO.Async
+    ( forConcurrently )
 import UnliftIO.Concurrent
     ( forkFinally, killThread, threadDelay )
 import UnliftIO.Exception
@@ -765,7 +769,9 @@ monitorMetadata gcStatus tr sp db@(DBLayer{..}) = do
     trFetch = contramap MsgFetchPoolMetadata tr
     fetchThem fetchMetadata = do
         refs <- atomically (unfetchedPoolMetadataRefs 100)
-        successes <- fmap catMaybes $ forM refs $ \(pid, url, hash) -> do
+        let batchSize = 15 -- concurrent requests
+        successes <- fmap (catMaybes . join) $ forM (chunksOf batchSize refs)
+            $ \batch -> forConcurrently batch $ \(pid, url, hash) -> do
             fetchMetadata pid url hash >>= \case
                 Nothing -> Nothing <$ do
                     atomically $ putFetchAttempt (url, hash)

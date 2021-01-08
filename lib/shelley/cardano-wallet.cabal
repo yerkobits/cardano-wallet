@@ -75,6 +75,7 @@ library
     , retry
     , servant-server
     , shelley-spec-ledger
+    , split
     , temporary
     , text
     , text-class
