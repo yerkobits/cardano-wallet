@@ -318,6 +318,7 @@ class
            , [W.DelegationCertificate]
            , [W.PoolCertificate]
            )
+    toGenTx :: Cardano.Tx era -> CardanoGenTx StandardCrypto
 
 switchOnEra
     :: AnyCardanoEra
@@ -354,12 +355,15 @@ decodeEraTx proxy bytes = do
 
 instance WalletCompatibleEra ShelleyEra where
     fromEraTx = fromShelleyTx
+    toGenTx (Cardano.ShelleyTx _era tx) = GenTxShelley $ O.mkShelleyTx tx
 
 instance WalletCompatibleEra AllegraEra where
     fromEraTx = fromAllegraTx
+    toGenTx (Cardano.ShelleyTx _era tx) = GenTxAllegra $ O.mkShelleyTx tx
 
 instance WalletCompatibleEra MaryEra where
     fromEraTx = fromMaryTx
+    toGenTx (Cardano.ShelleyTx _era tx) = GenTxMary $ O.mkShelleyTx tx
 
 type NodeVersionData =
     (NodeToClientVersionData, CodecCBORTerm Text NodeToClientVersionData)
