@@ -26,7 +26,6 @@ module Cardano.Wallet.Shelley.Transaction
 
     -- * Internals
     , _minimumFee
-    , _decodeSignedTx
     , _estimateMaxNumberOfInputs
     , mkUnsignedTx
     , mkShelleyWitness
@@ -84,6 +83,7 @@ import Cardano.Wallet.Shelley.Compatibility
     ( AllegraEra
     , CardanoEra (MaryEra)
     , ShelleyEra
+    , decodeTx
     , fromAllegraTx
     , fromMaryTx
     , fromShelleyTx
@@ -100,17 +100,11 @@ import Cardano.Wallet.Shelley.Compatibility
     , toStakePoolDlgCert
     )
 import Cardano.Wallet.Transaction
-    ( DelegationAction (..)
-    , ErrDecodeSignedTx (..)
-    , ErrMkTx (..)
-    , TransactionLayer (..)
-    )
+    ( DelegationAction (..), ErrMkTx (..), TransactionLayer (..) )
 import Control.Arrow
     ( first, left, second )
 import Control.Monad
     ( forM )
-import Data.ByteString
-    ( ByteString )
 import Data.Quantity
     ( Quantity (..) )
 import Data.Type.Equality
@@ -262,7 +256,7 @@ newTransactionLayer networkId = TransactionLayer
     , mkDelegationQuitTx = \era acc ks ttl cs ->
         withShelleyBasedEra era $ _mkDelegationQuitTx acc ks ttl cs
     , decodeSignedTx =
-        _decodeSignedTx
+        decodeTx
     , minimumFee =
         _minimumFee @k
     , estimateMaxNumberOfInputs =
@@ -390,36 +384,6 @@ dummyCoinSel nInps nOuts = mempty
     dummyTxIn   = TxIn (Hash $ BS.pack (1:replicate 64 0)) . fromIntegral
     dummyTxOut  = TxOut dummyAddr (TokenBundle.fromCoin $ Coin 1)
     dummyAddr   = Address $ BS.pack (1:replicate 64 0)
-
-_decodeSignedTx
-    :: AnyCardanoEra
-    -> ByteString
-    -> Either ErrDecodeSignedTx (Tx, SealedTx)
-_decodeSignedTx era bytes = do
-    case era of
-        AnyCardanoEra ShelleyEra ->
-            case Cardano.deserialiseFromCBOR (Cardano.AsTx Cardano.AsShelleyEra) bytes of
-                Right txValid ->
-                    pure $ sealShelleyTx fromShelleyTx txValid
-                Left decodeErr ->
-                    Left $ ErrDecodeSignedTxWrongPayload (T.pack $ show decodeErr)
-
-        AnyCardanoEra AllegraEra ->
-            case Cardano.deserialiseFromCBOR (Cardano.AsTx Cardano.AsAllegraEra) bytes of
-                Right txValid ->
-                    pure $ sealShelleyTx fromAllegraTx txValid
-                Left decodeErr ->
-                    Left $ ErrDecodeSignedTxWrongPayload (T.pack $ show decodeErr)
-
-        AnyCardanoEra MaryEra ->
-            case Cardano.deserialiseFromCBOR (Cardano.AsTx Cardano.AsMaryEra) bytes of
-                Right txValid ->
-                    pure $ sealShelleyTx fromMaryTx txValid
-                Left decodeErr ->
-                    Left $ ErrDecodeSignedTxWrongPayload (T.pack $ show decodeErr)
-
-        _ ->
-            Left ErrDecodeSignedTxNotSupported
 
 _minimumFee
     :: forall k. TxWitnessTagFor k

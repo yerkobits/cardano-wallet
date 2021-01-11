@@ -70,14 +70,13 @@ import Cardano.Wallet.Primitive.Types.Tx
 import Cardano.Wallet.Primitive.Types.UTxO
     ( UTxO (..) )
 import Cardano.Wallet.Shelley.Compatibility
-    ( fromAllegraTx, fromShelleyTx, sealShelleyTx )
+    ( decodeTx, fromAllegraTx, fromShelleyTx, sealShelleyTx )
 import Cardano.Wallet.Shelley.Transaction
     ( TxWitnessTagFor
     , mkByronWitness
     , mkShelleyWitness
     , mkUnsignedTx
     , newTransactionLayer
-    , _decodeSignedTx
     , _estimateMaxNumberOfInputs
     )
 import Cardano.Wallet.Transaction
@@ -418,7 +417,7 @@ prop_decodeSignedShelleyTxRoundtrip shelleyEra (DecodeShelleySetup utxo outs md 
             Cardano.ShelleyBasedEraAllegra -> Right $ sealShelleyTx fromAllegraTx ledgerTx
             Cardano.ShelleyBasedEraMary    -> Left ErrDecodeSignedTxNotSupported
 
-    _decodeSignedTx anyEra (Cardano.serialiseToCBOR ledgerTx) === expected
+    decodeTx anyEra (Cardano.serialiseToCBOR ledgerTx) === expected
 
 prop_decodeSignedByronTxRoundtrip
     :: DecodeByronSetup
@@ -432,7 +431,7 @@ prop_decodeSignedByronTxRoundtrip (DecodeByronSetup utxo outs slotNo ntwrk pairs
     let byronWits = zipWith (mkByronWitness' unsigned) inps pairs
     let ledgerTx = Cardano.makeSignedTransaction byronWits unsigned
 
-    _decodeSignedTx era (Cardano.serialiseToCBOR ledgerTx)
+    decodeTx era (Cardano.serialiseToCBOR ledgerTx)
         === Right (sealShelleyTx fromAllegraTx ledgerTx)
   where
     mkByronWitness' unsigned (_, (TxOut addr _)) =

@@ -10,6 +10,7 @@
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE Rank2Types #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
@@ -71,6 +72,9 @@ module Cardano.Wallet.Shelley.Compatibility
     , toCardanoStakeCredential
     , toCardanoValue
     , fromCardanoValue
+
+    , WalletCompatibleEra (..)
+    , decodeTx
 
       -- ** Stake pools
     , fromPoolId
@@ -158,6 +162,8 @@ import Cardano.Wallet.Primitive.Types
     , PoolRegistrationCertificate (..)
     , PoolRetirementCertificate (..)
     )
+import Cardano.Wallet.Transaction
+    ( ErrDecodeSignedTx (..) )
 import Cardano.Wallet.Unsafe
     ( unsafeDeserialiseCbor, unsafeMkPercentage )
 import Codec.Binary.Bech32
@@ -287,6 +293,7 @@ import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Short as SBS
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
+import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import qualified Data.Text.Encoding.Error as T
 import qualified Ouroboros.Consensus.Shelley.Ledger as O
@@ -298,6 +305,61 @@ import qualified Shelley.Spec.Ledger.BaseTypes as SL
 import qualified Shelley.Spec.Ledger.BlockChain as SL
 import qualified Shelley.Spec.Ledger.Credential as SL
 import qualified Shelley.Spec.Ledger.UTxO as SL
+
+
+class
+    ( Cardano.HasTypeProxy era
+    , Cardano.IsCardanoEra era
+    , Cardano.IsShelleyBasedEra era
+    ) => WalletCompatibleEra era where
+    fromEraTx
+        :: SL.Tx (Cardano.ShelleyLedgerEra era)
+        -> ( W.Tx
+           , [W.DelegationCertificate]
+           , [W.PoolCertificate]
+           )
+
+switchOnEra
+    :: AnyCardanoEra
+    -> (forall era. WalletCompatibleEra era => Proxy era -> a)
+    -> Maybe a
+switchOnEra (AnyCardanoEra era) f = case era of
+    ByronEra -> Nothing
+    ShelleyEra -> Just $ f $ Proxy @ShelleyEra
+    AllegraEra -> Just $ f $ Proxy @AllegraEra
+    MaryEra -> Just $ f $ Proxy @MaryEra
+
+decodeTx
+    :: AnyCardanoEra
+    -> ByteString
+    -> Either ErrDecodeSignedTx (W.Tx, W.SealedTx)
+decodeTx era bytes = fromMaybe (Left ErrDecodeSignedTxNotSupported)
+    $ switchOnEra era (`decodeEraTx` bytes)
+
+decodeEraTx
+    :: forall era. WalletCompatibleEra era
+    => Proxy era
+    -> ByteString
+    -> Either ErrDecodeSignedTx (W.Tx, W.SealedTx)
+decodeEraTx proxy bytes = do
+    let asType = Cardano.proxyToAsType proxy
+    case Cardano.deserialiseFromCBOR (Cardano.AsTx asType) bytes of
+        Right (Cardano.ShelleyTx _era tx) -> do
+            let (walletTx, _delegCerts, _poolCerts) = fromEraTx @era tx
+            return (walletTx, W.SealedTx bytes)
+        Right (Cardano.ByronTx _) -> do
+            Left ErrDecodeSignedTxNotSupported
+        Left decodeErr ->
+            Left $ ErrDecodeSignedTxWrongPayload (T.pack $ show decodeErr)
+
+instance WalletCompatibleEra ShelleyEra where
+    fromEraTx = fromShelleyTx
+
+instance WalletCompatibleEra AllegraEra where
+    fromEraTx = fromAllegraTx
+
+instance WalletCompatibleEra MaryEra where
+    fromEraTx = fromMaryTx
 
 type NodeVersionData =
     (NodeToClientVersionData, CodecCBORTerm Text NodeToClientVersionData)
