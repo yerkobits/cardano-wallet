@@ -112,7 +112,12 @@ import GHC.Generics
     ( Generic )
 import Numeric.Natural
     ( Natural )
+import Ouroboros.Consensus.Cardano.Block
+    ( CardanoGenTx )
+import Ouroboros.Consensus.Shelley.Protocol.Crypto
+    ( StandardCrypto )
 
+import qualified Cardano.Api.Typed as Cardano
 import qualified Cardano.Wallet.Primitive.Types.TokenBundle as TokenBundle
 import qualified Cardano.Wallet.Primitive.Types.TokenMap as TokenMap
 import qualified Data.Map.Strict as Map
@@ -358,9 +363,8 @@ instance ToText Direction where
 
 -- | @SealedTx@ is a serialised transaction that is ready to be submitted
 -- to the node.
-newtype SealedTx = SealedTx { getSealedTx :: ByteString }
+newtype SealedTx = SealedTx { getSealedTx :: CardanoGenTx StandardCrypto }
     deriving stock (Show, Eq, Generic)
-    deriving newtype (ByteArrayAccess)
 
 -- | True if the given metadata refers to a pending transaction
 isPending :: TxMeta -> Bool

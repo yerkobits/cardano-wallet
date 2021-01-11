@@ -23,6 +23,9 @@
 -- Jörmungandr dual support.
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
+-- For IsShelleyLedger
+{-# OPTIONS_GHC -fno-warn-redundant-constraints #-}
+
 -- |
 -- Copyright: © 2020 IOHK
 -- License: Apache-2.0
@@ -52,7 +55,6 @@ module Cardano.Wallet.Shelley.Compatibility
       -- * Conversions
     , toCardanoHash
     , toEpochSize
-    , unsealShelleyTx
     , toPoint
     , toCardanoTxId
     , toCardanoTxIn
@@ -60,7 +62,6 @@ module Cardano.Wallet.Shelley.Compatibility
     , toAllegraTxOut
     , toMaryTxOut
     , toCardanoLovelace
-    , sealShelleyTx
     , toStakeKeyRegCert
     , toStakeKeyDeregCert
     , toStakePoolDlgCert
@@ -139,8 +140,6 @@ import Cardano.Api.Typed
     , deserialiseFromRawBytes
     , fromShelleyMetadata
     )
-import Cardano.Binary
-    ( fromCBOR, serialize' )
 import Cardano.Crypto.Hash.Class
     ( Hash (UnsafeHash), hashToBytes )
 import Cardano.Ledger.Era
@@ -154,7 +153,7 @@ import Cardano.Wallet.Api.Types
     , EncodeStakeAddress (..)
     )
 import Cardano.Wallet.Byron.Compatibility
-    ( fromByronBlock, fromTxAux, toByronBlockHeader )
+    ( fromByronBlock, toByronBlockHeader )
 import Cardano.Wallet.Primitive.AddressDerivation
     ( NetworkDiscriminant (..) )
 import Cardano.Wallet.Primitive.Types
@@ -165,7 +164,7 @@ import Cardano.Wallet.Primitive.Types
 import Cardano.Wallet.Transaction
     ( ErrDecodeSignedTx (..) )
 import Cardano.Wallet.Unsafe
-    ( unsafeDeserialiseCbor, unsafeMkPercentage )
+    ( unsafeMkPercentage )
 import Codec.Binary.Bech32
     ( dataPartFromBytes, dataPartToBytes )
 import Control.Applicative
@@ -286,7 +285,6 @@ import qualified Cardano.Wallet.Primitive.Types.Tx as W
 import qualified Codec.Binary.Bech32 as Bech32
 import qualified Codec.Binary.Bech32.TH as Bech32
 import qualified Codec.CBOR.Decoding as CBOR
-import qualified Codec.CBOR.Write as CBOR
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
@@ -313,7 +311,7 @@ class
     , Cardano.IsShelleyBasedEra era
     ) => WalletCompatibleEra era where
     fromEraTx
-        :: SL.Tx (Cardano.ShelleyLedgerEra era)
+        :: Cardano.Tx era
         -> ( W.Tx
            , [W.DelegationCertificate]
            , [W.PoolCertificate]
@@ -345,25 +343,33 @@ decodeEraTx
 decodeEraTx proxy bytes = do
     let asType = Cardano.proxyToAsType proxy
     case Cardano.deserialiseFromCBOR (Cardano.AsTx asType) bytes of
-        Right (Cardano.ShelleyTx _era tx) -> do
-            let (walletTx, _delegCerts, _poolCerts) = fromEraTx @era tx
-            return (walletTx, W.SealedTx bytes)
+        Right tx'@(Cardano.ShelleyTx _era _tx) -> do
+            let (walletTx, _delegCerts, _poolCerts) = fromEraTx @era tx'
+            return (walletTx, W.SealedTx $ toGenTx tx')
         Right (Cardano.ByronTx _) -> do
             Left ErrDecodeSignedTxNotSupported
         Left decodeErr ->
             Left $ ErrDecodeSignedTxWrongPayload (T.pack $ show decodeErr)
 
 instance WalletCompatibleEra ShelleyEra where
-    fromEraTx = fromShelleyTx
+    fromEraTx = fromShelleyTx . shelleyLedgerTx
     toGenTx (Cardano.ShelleyTx _era tx) = GenTxShelley $ O.mkShelleyTx tx
 
 instance WalletCompatibleEra AllegraEra where
-    fromEraTx = fromAllegraTx
+    fromEraTx = fromAllegraTx . shelleyLedgerTx
     toGenTx (Cardano.ShelleyTx _era tx) = GenTxAllegra $ O.mkShelleyTx tx
 
 instance WalletCompatibleEra MaryEra where
-    fromEraTx = fromMaryTx
+    fromEraTx = fromMaryTx . shelleyLedgerTx
     toGenTx (Cardano.ShelleyTx _era tx) = GenTxMary $ O.mkShelleyTx tx
+
+shelleyLedgerTx
+    :: Cardano.IsShelleyBasedEra era
+    => Cardano.Tx era
+    -> SL.Tx (Cardano.ShelleyLedgerEra era)
+shelleyLedgerTx  (Cardano.ShelleyTx _era tx) = tx
+shelleyLedgerTx  (Cardano.ByronTx _) =
+    error "shelleyLedgerTx: impossible because of (IsShelleyBasedEra era)"
 
 type NodeVersionData =
     (NodeToClientVersionData, CodecCBORTerm Text NodeToClientVersionData)
@@ -1137,41 +1143,6 @@ toByronNetworkMagic pm@(W.ProtocolMagic magic) =
         Byron.NetworkMainOrStage
     else
         Byron.NetworkTestnet (fromIntegral magic)
-
--- | SealedTx are the result of rightfully constructed shelley transactions so, it
--- is relatively safe to unserialize them from CBOR.
-unsealShelleyTx
-    :: (HasCallStack, O.ShelleyBasedEra (era c))
-    => (GenTx (ShelleyBlock (era c)) -> CardanoGenTx c)
-    -> W.SealedTx
-    -> CardanoGenTx c
-unsealShelleyTx wrap = wrap
-    . unsafeDeserialiseCbor fromCBOR
-    . BL.fromStrict
-    . W.getSealedTx
-
-sealShelleyTx
-    :: forall era b c. (O.ShelleyBasedEra (Cardano.ShelleyLedgerEra era))
-    => (SL.Tx (Cardano.ShelleyLedgerEra era) -> (W.Tx, b, c))
-    -> Cardano.Tx era
-    -> (W.Tx, W.SealedTx)
-sealShelleyTx fromTx (Cardano.ShelleyTx _era tx) =
-    let
-        -- The Cardano.Tx GADT won't allow the Shelley crypto type param escape,
-        -- so we convert directly to the concrete wallet Tx type:
-        (walletTx, _, _) = fromTx tx
-        sealed = serialize' $ O.mkShelleyTx tx
-    in
-        (walletTx, W.SealedTx sealed)
-
--- Needed to compile, but in principle should never be called.
-sealShelleyTx _ (Cardano.ByronTx txaux) =
-    let
-        tx = fromTxAux txaux
-        inps = fst <$> W.resolvedInputs tx
-        outs = W.outputs tx
-    in
-        (tx, W.SealedTx $ CBOR.toStrictByteString $ CBOR.encodeTx (inps, outs))
 
 toCardanoTxId :: W.Hash "Tx" -> Cardano.TxId
 toCardanoTxId (W.Hash h) = Cardano.TxId $ UnsafeHash $ toShort h

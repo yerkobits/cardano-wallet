@@ -77,7 +77,6 @@ import Cardano.Wallet.Shelley.Compatibility
     , toPoint
     , toShelleyCoin
     , toStakeCredential
-    , unsealShelleyTx
     )
 import Control.Applicative
     ( liftA3 )
@@ -261,6 +260,7 @@ import qualified Cardano.Wallet.Primitive.Types.Hash as W
 import qualified Cardano.Wallet.Primitive.Types.RewardAccount as W
 import qualified Cardano.Wallet.Primitive.Types.Tx as W
 import qualified Codec.CBOR.Term as CBOR
+import qualified Data.ByteString as BS
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.Text as T
@@ -471,42 +471,14 @@ withNetworkLayerBase tr np conn (versionData, _) action = do
     _currentNodeEra nodeEraVar =
         atomically (readTVar nodeEraVar)
 
-    -- NOTE1: only shelley transactions can be submitted like this, because they
-    -- are deserialised as shelley transactions before submitting.
-    --
-    -- NOTE2: It is not ideal to query the current era again here because we
-    -- should in practice use the same era as the one used to construct the
-    -- transaction. However, when turning transactions to 'SealedTx', we loose
-    -- all form of type-level indicator about the era. The 'SealedTx' type
-    -- shouldn't be needed anymore since we've dropped jormungandr, so we could
-    -- instead carry a transaction from cardano-api types with proper typing.
-    _postTx localTxSubmissionQ nodeEraVar tx = do
-        era <- liftIO $ atomically $ readTVar nodeEraVar
+    -- FIXME: _nodeEraVar is no longer needed!
+    _postTx localTxSubmissionQ _nodeEraVar tx = do
         liftIO $ traceWith tr $ MsgPostTx tx
-        case era of
-            AnyCardanoEra ByronEra ->
-                throwE $ ErrPostTxProtocolFailure "Invalid era: Byron"
-
-            AnyCardanoEra ShelleyEra -> do
-                let cmd = CmdSubmitTx $ unsealShelleyTx GenTxShelley tx
-                result <- liftIO $ localTxSubmissionQ `send` cmd
-                case result of
-                    SubmitSuccess -> pure ()
-                    SubmitFail err -> throwE $ ErrPostTxBadRequest $ T.pack (show err)
-
-            AnyCardanoEra AllegraEra -> do
-                let cmd = CmdSubmitTx $ unsealShelleyTx GenTxAllegra tx
-                result <- liftIO $ localTxSubmissionQ `send` cmd
-                case result of
-                    SubmitSuccess -> pure ()
-                    SubmitFail err -> throwE $ ErrPostTxBadRequest $ T.pack (show err)
-
-            AnyCardanoEra MaryEra -> do
-                let cmd = CmdSubmitTx $ unsealShelleyTx GenTxMary tx
-                result <- liftIO $ localTxSubmissionQ `send` cmd
-                case result of
-                    SubmitSuccess -> pure ()
-                    SubmitFail err -> throwE $ ErrPostTxBadRequest $ T.pack (show err)
+        let cmd = CmdSubmitTx $ W.getSealedTx tx
+        result <- liftIO $ localTxSubmissionQ `send` cmd
+        case result of
+            SubmitSuccess -> pure ()
+            SubmitFail err -> throwE $ ErrPostTxBadRequest $ T.pack (show err)
 
     _stakeDistribution queue eraVar bh coin = do
         liftIO $ traceWith tr $ MsgWillQueryRewardsForStake coin
@@ -1364,10 +1336,15 @@ instance ToText NetworkLayerLog where
             ]
         MsgIntersectionFound point -> T.unwords
             [ "Intersection found:", pretty point ]
-        MsgPostTx (W.SealedTx bytes) -> T.unwords
-            [ "Posting transaction, serialized as:"
-            , T.decodeUtf8 $ convertToBase Base16 bytes
-            ]
+        MsgPostTx (W.SealedTx tx) ->
+            -- FIXME: Figure out how to convert GenTx to bytes
+            -- Probably: https://github.com/input-output-hk/ouroboros-network/blob/77766750051f672f43c5d070b7fcf41e13e7a191/ouroboros-consensus/src/Ouroboros/Consensus/Node/Serialisation.hs#L73
+            -- encodeNodeToClient
+            let bytes = "" :: BS.ByteString -- serialize' tx
+            in T.unwords
+                [ "Posting transaction, serialized as:"
+                , T.decodeUtf8 $ convertToBase Base16 bytes
+                ]
         MsgLocalStateQuery client msg ->
             T.pack (show client <> " " <> show msg)
         MsgNodeTip bh -> T.unwords

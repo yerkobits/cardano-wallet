@@ -77,6 +77,8 @@ library
     , OddWord
     , ouroboros-consensus
     , ouroboros-network
+    , ouroboros-consensus-shelley
+    , ouroboros-consensus-cardano
     , path-pieces
     , persistent
     , persistent-sqlite

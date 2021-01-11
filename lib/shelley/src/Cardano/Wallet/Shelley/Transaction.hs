@@ -83,15 +83,14 @@ import Cardano.Wallet.Shelley.Compatibility
     ( AllegraEra
     , CardanoEra (MaryEra)
     , ShelleyEra
+    , WalletCompatibleEra
     , decodeTx
-    , fromAllegraTx
-    , fromMaryTx
-    , fromShelleyTx
-    , sealShelleyTx
+    , fromEraTx
     , toAllegraTxOut
     , toCardanoLovelace
     , toCardanoStakeCredential
     , toCardanoTxIn
+    , toGenTx
     , toHDPayloadAddress
     , toMaryTxOut
     , toShelleyTxOut
@@ -171,6 +170,7 @@ type EraConstraints era =
     , Era (Cardano.ShelleyLedgerEra era)
     , DSIGN (Crypto (Cardano.ShelleyLedgerEra era)) ~ DSIGN.Ed25519DSIGN
     , (era == ByronEra) ~ 'False
+    , WalletCompatibleEra era
     )
 
 -- | Provide a transaction witness for a given private key. The type of witness
@@ -234,10 +234,9 @@ mkTx networkId payload expirySlot (rewardAcnt, pwdAcnt) keyFrom cs era = do
 
     let signed = Cardano.makeSignedTransaction wits unsigned
     let withResolvedInputs tx = tx { resolvedInputs = second txOutCoin <$> CS.inputs cs }
-    Right $ first withResolvedInputs $ case era of
-        ShelleyBasedEraShelley -> sealShelleyTx fromShelleyTx signed
-        ShelleyBasedEraAllegra -> sealShelleyTx fromAllegraTx signed
-        ShelleyBasedEraMary    -> sealShelleyTx fromMaryTx signed
+    let (walletTx, _delegCerts, _poolCerts) = fromEraTx signed
+    Right $ first withResolvedInputs $
+        (walletTx, SealedTx $ toGenTx signed)
 
 newTransactionLayer
     :: forall k.
