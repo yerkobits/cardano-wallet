@@ -897,6 +897,10 @@ mkShelleyWitness body key =
         $ Cardano.PaymentExtendedSigningKey
         $ Crypto.HD.xPrvChangePass pwd BS.empty xprv
 
+-- NOTE: Arguably we should use cardano-api here, e.g.
+-- >> Cardano.makeShelleyBootstrapWitness (Cardano.WitnessNetworkId nw) body signingKey
+-- >>   where signingKey = Cardano.ByronSigningKey $ Byron.SigningKey
+-- but it still seems to be subtly different, and the integration tests fail.
 mkByronWitness
     :: forall era. (EraConstraints era)
     => Cardano.TxBody era
