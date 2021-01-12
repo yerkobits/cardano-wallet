@@ -751,8 +751,8 @@ mkUnsignedTx era ttl cs md wdrls certs =
     fees :: Cardano.Lovelace
     fees = toCardanoLovelace $ Coin $ feeBalance cs
 
-    mkShelleyTx :: Either ErrMkTx (Cardano.TxBody ShelleyEra)
-    mkShelleyTx = left toErrMkTx $ Cardano.makeTransactionBody $ Cardano.TxBodyContent
+    mkShelleyTx :: AnyCardanoEra -> (forall era. WalletCompatibleEra era => Either ErrMkTx (Cardano.TxBody ShelleyEra))
+    mkShelleyTx era = left toErrMkTx $ Cardano.makeTransactionBody $ Cardano.TxBodyContent
         { Cardano.txIns =
             toCardanoTxIn . fst <$> CS.inputs cs
 

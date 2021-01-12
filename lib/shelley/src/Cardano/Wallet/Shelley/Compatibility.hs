@@ -304,7 +304,6 @@ import qualified Shelley.Spec.Ledger.BlockChain as SL
 import qualified Shelley.Spec.Ledger.Credential as SL
 import qualified Shelley.Spec.Ledger.UTxO as SL
 
-
 class
     ( Cardano.HasTypeProxy era
     , Cardano.IsCardanoEra era
@@ -318,6 +317,7 @@ class
            )
     toGenTx :: Cardano.Tx era -> CardanoGenTx StandardCrypto
 
+-- | NOTE: Returns @Nothing@ for @ByronEra@
 switchOnEra
     :: AnyCardanoEra
     -> (forall era. WalletCompatibleEra era => Proxy era -> a)
@@ -328,6 +328,7 @@ switchOnEra (AnyCardanoEra era) f = case era of
     AllegraEra -> Just $ f $ Proxy @AllegraEra
     MaryEra -> Just $ f $ Proxy @MaryEra
 
+-- | Decode a binary as a tx of a given era (excluding byron)
 decodeTx
     :: AnyCardanoEra
     -> ByteString
@@ -363,6 +364,7 @@ instance WalletCompatibleEra MaryEra where
     fromEraTx = fromMaryTx . shelleyLedgerTx
     toGenTx (Cardano.ShelleyTx _era tx) = GenTxMary $ O.mkShelleyTx tx
 
+-- | Unwraps the underlying ledger tx from a @Cardano.Tx era@
 shelleyLedgerTx
     :: Cardano.IsShelleyBasedEra era
     => Cardano.Tx era
