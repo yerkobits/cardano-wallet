@@ -66,10 +66,6 @@ import Control.DeepSeq
     ( NFData (..) )
 import Data.Bifunctor
     ( first )
-import Data.ByteArray
-    ( ByteArrayAccess )
-import Data.ByteString
-    ( ByteString )
 import Data.Function
     ( (&) )
 import Data.Generics.Internal.VL.Lens
@@ -117,7 +113,6 @@ import Ouroboros.Consensus.Cardano.Block
 import Ouroboros.Consensus.Shelley.Protocol.Crypto
     ( StandardCrypto )
 
-import qualified Cardano.Api.Typed as Cardano
 import qualified Cardano.Wallet.Primitive.Types.TokenBundle as TokenBundle
 import qualified Cardano.Wallet.Primitive.Types.TokenMap as TokenMap
 import qualified Data.Map.Strict as Map
