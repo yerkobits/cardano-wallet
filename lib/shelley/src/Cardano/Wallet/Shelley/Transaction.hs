@@ -235,7 +235,7 @@ mkTx networkId payload expirySlot (rewardAcnt, pwdAcnt) keyFrom cs era = do
     let signed = Cardano.makeSignedTransaction wits unsigned
     let withResolvedInputs tx = tx { resolvedInputs = second txOutCoin <$> CS.inputs cs }
     let (walletTx, _delegCerts, _poolCerts) = fromEraTx signed
-    Right $ first withResolvedInputs $
+    Right $ first withResolvedInputs
         (walletTx, SealedTx $ toGenTx signed)
 
 newTransactionLayer
@@ -751,8 +751,8 @@ mkUnsignedTx era ttl cs md wdrls certs =
     fees :: Cardano.Lovelace
     fees = toCardanoLovelace $ Coin $ feeBalance cs
 
-    mkShelleyTx :: AnyCardanoEra -> (forall era. WalletCompatibleEra era => Either ErrMkTx (Cardano.TxBody ShelleyEra))
-    mkShelleyTx era = left toErrMkTx $ Cardano.makeTransactionBody $ Cardano.TxBodyContent
+    mkShelleyTx :: Either ErrMkTx (Cardano.TxBody ShelleyEra)
+    mkShelleyTx = left toErrMkTx $ Cardano.makeTransactionBody $ Cardano.TxBodyContent
         { Cardano.txIns =
             toCardanoTxIn . fst <$> CS.inputs cs
 
