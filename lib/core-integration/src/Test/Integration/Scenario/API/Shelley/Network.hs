@@ -1,4 +1,6 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE MonoLocalBinds #-}
 {-# LANGUAGE OverloadedLabels #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
@@ -10,21 +12,24 @@ module Test.Integration.Scenario.API.Shelley.Network
 import Prelude
 
 import Cardano.Wallet.Api.Types
-    ( ApiNetworkParameters (..) )
+    ( ApiEpochInfo, ApiEra (..), ApiNetworkParameters (..) )
+import Data.List
+    ( (\\) )
 import Data.Quantity
     ( Quantity (..), mkPercentage )
 import Data.Ratio
     ( (%) )
 import Test.Hspec
-    ( SpecWith, describe, shouldBe, shouldNotBe )
+    ( Expectation, SpecWith, describe, shouldBe, shouldNotBe )
 import Test.Hspec.Extra
     ( it )
 import Test.Integration.Framework.DSL
     ( Context (..)
     , Headers (..)
     , Payload (..)
+    , RequestException
+    , counterexample
     , epochLengthValue
-    , eventually
     , expectField
     , expectResponseCode
     , minUTxOValue
@@ -39,22 +44,40 @@ import qualified Network.HTTP.Types.Status as HTTP
 
 spec :: SpecWith Context
 spec = describe "SHELLEY_NETWORK" $ do
-    it "NETWORK_PARAMS - Able to fetch network parameters" $ \ctx ->
-        eventually "hardfork is detected in network parameters " $ do
+    it "NETWORK_PARAMS - Able to fetch network parameters" $ \ctx -> do
         r <- request @ApiNetworkParameters ctx Link.getNetworkParams Default Empty
         expectResponseCode @IO HTTP.status200 r
         let Right d = Quantity <$> mkPercentage (3 % 4)
         -- for Shelley desiredPoolNumber is node's nOpt protocol parameter
         -- in integration test setup it is 3
         let nOpt = 3
-        verify r
+
+        let clusterEra = _mainEra ctx
+
+        let
+            expectEraField
+                :: (Maybe ApiEpochInfo -> Expectation)
+                -> ApiEra
+                -> (HTTP.Status, Either RequestException ApiNetworkParameters)
+                -> IO ()
+            expectEraField toBe era = counterexample ("For era: " <> show era)
+                . case era of
+                    ApiByron -> expectField (#eras . #byron) toBe
+                    ApiShelley -> expectField (#eras . #shelley) toBe
+                    ApiAllegra -> expectField (#eras . #allegra) toBe
+                    ApiMary -> expectField (#eras . #mary) toBe
+
+        let seenEras = [minBound .. clusterEra]
+        let futureEras = [minBound .. maxBound] \\ seenEras
+
+        verify r $
             [ expectField #decentralizationLevel (`shouldBe` d)
             , expectField #desiredPoolNumber (`shouldBe` nOpt)
             , expectField #minimumUtxoValue (`shouldBe` Quantity minUTxOValue)
-            , expectField (#eras . #shelley) (`shouldNotBe` Nothing)
-            , expectField (#eras . #byron) (`shouldNotBe` Nothing)
             , expectField #slotLength (`shouldBe` Quantity slotLengthValue)
             , expectField #epochLength (`shouldBe` Quantity epochLengthValue)
             , expectField #securityParameter (`shouldBe` Quantity securityParameterValue)
             , expectField #activeSlotCoefficient (`shouldBe` Quantity 50.0)
             ]
+            ++ map (expectEraField (`shouldNotBe` Nothing)) seenEras
+            ++ map (expectEraField (`shouldBe` Nothing)) futureEras
