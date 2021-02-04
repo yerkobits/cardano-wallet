@@ -1211,7 +1211,7 @@ selectionToUnsignedTx sel s =
     UnsignedTx
         (fullyQualifiedInputs $ inputsSelected sel)
         (outputsCovered sel)
-        (fullyQualifiedChange $ NE.toList $ changeGenerated sel)
+        (fullyQualifiedChange $ changeGenerated sel)
   where
     qualifyAddresses
         :: forall a t. (Traversable t)
@@ -1288,11 +1288,15 @@ selectAssetsNoOutputs ctx wid tx transform = do
                     (view #tokens (head $ outputsCovered sel))
                     (TokenBundle.fromCoin deposit)
             in
-                once (TokenBundle.add reclaim) (changeGenerated sel)
+                once
+                    (TokenBundle.empty)
+                    (TokenBundle.add reclaim)
+                    (changeGenerated sel)
         }
   where
-    once :: (a -> a) -> NonEmpty a -> NonEmpty a
-    once fn (a :| as) = fn a :| as
+    once :: a -> (a -> a) -> [a] -> [a]
+    once _ f (a : as) = f a : as
+    once a _ [] = [a]
 
 -- | Selects assets from the wallet's UTxO to satisfy the requested outputs in
 -- the given transaction context. In case of success, returns the selection
@@ -1434,7 +1438,7 @@ mkTxMeta
 mkTxMeta ti' blockHeader wState txCtx sel =
     let
         amtOuts = sumCoins $
-            (txOutCoin <$> NE.toList (changeGenerated sel))
+            (txOutCoin <$> changeGenerated sel)
             ++
             mapMaybe ourCoin (outputsCovered sel)
 
