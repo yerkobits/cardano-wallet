@@ -28,8 +28,12 @@ import Cardano.Wallet.Api.Types
     )
 import Cardano.Wallet.Primitive.AddressDerivation
     ( PaymentAddress )
+import Cardano.Wallet.Primitive.AddressDerivation.Byron
+    ( ByronKey )
 import Cardano.Wallet.Primitive.AddressDerivation.Icarus
     ( IcarusKey )
+import Cardano.Wallet.Primitive.SyncProgress
+    ( SyncProgress (..) )
 import Cardano.Wallet.Primitive.Types.Tx
     ( Direction (..), TxStatus (..) )
 import Control.Monad
@@ -49,7 +53,7 @@ import Numeric.Natural
 import Test.Hspec
     ( SpecWith, describe )
 import Test.Hspec.Expectations.Lifted
-    ( shouldBe )
+    ( shouldBe, shouldNotBe )
 import Test.Hspec.Extra
     ( it )
 import Test.Integration.Framework.DSL
@@ -70,6 +74,8 @@ import Test.Integration.Framework.DSL
     , faucetAmt
     , faucetUtxoAmt
     , fixtureIcarusWallet
+    , fixtureMultiAssetIcarusWallet
+    , fixtureMultiAssetRandomWallet
     , fixturePassphrase
     , fixtureRandomWallet
     , fixtureWallet
@@ -77,6 +83,8 @@ import Test.Integration.Framework.DSL
     , json
     , listAddresses
     , minUTxOValue
+    , mkTxPayloadMA
+    , pickAnAsset
     , postByronWallet
     , postTx
     , request
@@ -91,6 +99,7 @@ import Test.Integration.Framework.TestData
     ( errMsg400StartTimeLaterThanEndTime, errMsg404NoWallet )
 
 import qualified Cardano.Wallet.Api.Link as Link
+import qualified Cardano.Wallet.Primitive.Types.TokenMap as TokenMap
 import qualified Data.Text as T
 import qualified Network.HTTP.Types.Status as HTTP
 
@@ -103,9 +112,49 @@ spec :: forall n.
     ( DecodeAddress n
     , DecodeStakeAddress n
     , EncodeAddress n
+    , PaymentAddress n ByronKey
     , PaymentAddress n IcarusKey
     ) => SpecWith Context
 spec = describe "BYRON_TRANSACTIONS" $ do
+
+    it "BYRON_TRANS_ASSETS_CREATE_01 - Multi-asset transaction from Random"
+      $ \ctx -> runResourceT $ do
+      wSrc <- fixtureMultiAssetRandomWallet @n ctx
+      eventually "Byron wallet has assets" $ do
+          rb <- request @ApiByronWallet ctx
+              (Link.getWallet @'Byron wSrc) Default Empty
+          verify rb
+              [ expectField (#assets . #available . #getApiT)
+                  (`shouldNotBe` TokenMap.empty)
+              , expectField (#assets . #total . #getApiT)
+                  (`shouldNotBe` TokenMap.empty)
+              , expectField (#state . #getApiT) (`shouldBe` Ready)
+              ]
+      wDest <- emptyWallet ctx
+
+      -- pick out an asset to send
+      liftIO $ print wSrc
+      let assetsSrc = wSrc ^. #assets . #total . #getApiT
+      assetsSrc `shouldNotBe` mempty
+      let val = minUTxOValue <$ pickAnAsset assetsSrc
+
+      addrs <- listAddresses @n ctx wDest
+      let destination = (addrs !! 1) ^. #id
+      payload <- mkTxPayloadMA @n destination 0 [val] fixturePassphrase
+
+      rtx <- request @(ApiTransaction n) ctx
+          (Link.createTransaction @'Byron wSrc) Default payload
+      expectResponseCode HTTP.status202 rtx
+
+      eventually "Payee wallet balance is as expected" $ do
+          rb <- request @ApiWallet ctx
+              (Link.getWallet @'Shelley wDest) Default Empty
+          verify rb
+              [ expectField (#assets . #available . #getApiT)
+                  (`shouldNotBe` TokenMap.empty)
+              , expectField (#assets . #total . #getApiT)
+                  (`shouldNotBe` TokenMap.empty)
+              ]
 
     describe "BYRON_TRANS_CREATE_01 - Single Output Transaction with non-Shelley witnesses" $
         forM_ [(fixtureRandomWallet, "Byron wallet"), (fixtureIcarusWallet, "Icarus wallet")] $
