@@ -33,6 +33,7 @@
           (hsPkgs."bech32-th" or (errorHandler.buildDepError "bech32-th"))
           (hsPkgs."binary" or (errorHandler.buildDepError "binary"))
           (hsPkgs."bytestring" or (errorHandler.buildDepError "bytestring"))
+          (hsPkgs."casing" or (errorHandler.buildDepError "casing"))
           (hsPkgs."cardano-addresses" or (errorHandler.buildDepError "cardano-addresses"))
           (hsPkgs."cardano-api" or (errorHandler.buildDepError "cardano-api"))
           (hsPkgs."cardano-crypto" or (errorHandler.buildDepError "cardano-crypto"))
